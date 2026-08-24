@@ -22,7 +22,7 @@
 | P1-09 | Measurement Panel Host Spike | **PASS / COMPLETE** | P1-08 PASS | Stable docked panel or inspector fallback |
 | P1-10 | Guide Engine PoC | **PASS / COMPLETE** | P1-09 PASS | Persistent guide preference and short instructions |
 | P1-11 | Spike Persistence | **PASS / COMPLETE** | P1-10 PASS | Transactional standalone SQLite store |
-| P1-12 | Reload / Restore | **PASS / REVIEW** | P1-11 PASS | SOP UID + frame exact restore |
-| P1-13 | Lifecycle / Stability Test | BLOCKED | P1-12 PASS | Regression report and Platform Gate matrix |
+| P1-12 | Reload / Restore | **PASS / COMPLETE** | P1-11 PASS | SOP UID + frame exact restore |
+| P1-13 | Lifecycle / Stability Test | **PASS / REVIEW** | P1-12 PASS | Regression report and Platform Gate matrix |
 
 Detailed scope, acceptance criteria, and STOP conditions are in `docs/platform/PLATFORM_SPIKE.md` and the corresponding GitHub Issues.

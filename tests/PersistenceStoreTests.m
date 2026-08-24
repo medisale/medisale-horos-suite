@@ -165,6 +165,27 @@ static BOOL IntegrityPasses(NSURL *databaseURL)
     return passed;
 }
 
+static BOOL ExclusiveTransactionPasses(NSURL *databaseURL)
+{
+    sqlite3 *database = NULL;
+    int result = sqlite3_open_v2(databaseURL.fileSystemRepresentation,
+        &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX |
+        SQLITE_OPEN_NOFOLLOW, NULL);
+    if (result != SQLITE_OK) {
+        if (database != NULL) {
+            sqlite3_close(database);
+        }
+        return NO;
+    }
+    sqlite3_busy_timeout(database, 250);
+    BOOL passed = sqlite3_exec(database, "BEGIN EXCLUSIVE", NULL, NULL, NULL) == SQLITE_OK;
+    if (passed) {
+        passed = sqlite3_exec(database, "ROLLBACK", NULL, NULL, NULL) == SQLITE_OK;
+    }
+    sqlite3_close(database);
+    return passed;
+}
+
 static NSInteger UserVersion(NSURL *databaseURL)
 {
     sqlite3 *database = OpenReadOnly(databaseURL);
@@ -400,6 +421,71 @@ int main(void)
         Check([relaunchRestore.measurementID isEqual:firstID] &&
               fabs(relaunchRestore.endpointBX - updated.endpointBX) < 0.000001,
               @"reopened store must restore the exact committed measurement");
+
+        store = nil;
+        reopened = nil;
+        Check(ExclusiveTransactionPasses(databaseURL),
+              @"closed primary stores must leave no database lock");
+
+        for (NSUInteger cycle = 0; cycle < 10; cycle++) {
+            @autoreleasepool {
+                NSURL *cycleDirectory = [temporaryRoot
+                    URLByAppendingPathComponent:[NSString stringWithFormat:
+                        @"lifecycle-%lu", (unsigned long)cycle]
+                                     isDirectory:YES];
+                NSURL *cycleDatabase = [cycleDirectory
+                    URLByAppendingPathComponent:@"measurements.sqlite3"
+                                     isDirectory:NO];
+                NSError *cycleError = nil;
+                SQLiteMeasurementStore *cycleStore = [[SQLiteMeasurementStore alloc]
+                    initWithDatabaseURL:cycleDatabase error:&cycleError];
+                Check(cycleStore != nil && cycleError == nil,
+                      @"lifecycle store open must succeed");
+
+                ImageContext *cycleContext = Context((NSInteger)(cycle % 2));
+                NSString *cycleID = NSUUID.UUID.UUIDString;
+                NSDate *cycleCreated = [NSDate dateWithTimeIntervalSince1970:
+                    2000.0 + (NSTimeInterval)cycle * 2.0];
+                MeasurementRecord *cycleInitial = Record(
+                    cycleID, cycleContext, 8.0, 9.0, 30.0, 31.0,
+                    cycleCreated, cycleCreated);
+                Check([cycleStore saveMeasurement:cycleInitial error:&cycleError],
+                      @"lifecycle initial save must commit");
+
+                NSDate *cycleUpdatedAt = [cycleCreated dateByAddingTimeInterval:1.0];
+                MeasurementRecord *cycleUpdated = Record(
+                    cycleID, cycleContext, 10.0, 11.0, 32.0, 33.0,
+                    cycleCreated, cycleUpdatedAt);
+                Check([cycleStore saveMeasurement:cycleUpdated error:&cycleError],
+                      @"lifecycle update must commit");
+                Check(RecordCount(cycleDatabase) == 1,
+                      @"lifecycle update must not create a partial or duplicate row");
+                MeasurementRecord *cycleRestored =
+                    [cycleStore latestMeasurementForImageContext:cycleContext
+                                                            error:&cycleError];
+                Check([cycleRestored.measurementID isEqual:cycleID] &&
+                      fabs(cycleRestored.endpointBX - cycleUpdated.endpointBX) < 0.000001,
+                      @"lifecycle restore must return the committed update");
+
+                cycleStore = nil;
+                Check(ExclusiveTransactionPasses(cycleDatabase),
+                      @"lifecycle close must release the database lock");
+
+                SQLiteMeasurementStore *cycleReopened = [[SQLiteMeasurementStore alloc]
+                    initWithDatabaseURL:cycleDatabase error:&cycleError];
+                MeasurementRecord *reopenedRecord =
+                    [cycleReopened latestMeasurementForImageContext:cycleContext
+                                                               error:&cycleError];
+                Check(cycleReopened != nil &&
+                      [reopenedRecord.measurementID isEqual:cycleID],
+                      @"lifecycle reopen must retain the exact committed record");
+                Check(IntegrityPasses(cycleDatabase),
+                      @"lifecycle database integrity must pass");
+                cycleReopened = nil;
+                Check(ExclusiveTransactionPasses(cycleDatabase),
+                      @"lifecycle reopened close must release the database lock");
+            }
+        }
 
         [NSFileManager.defaultManager removeItemAtURL:temporaryRoot error:NULL];
         if (Failures == 0) {
