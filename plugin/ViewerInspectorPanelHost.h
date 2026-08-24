@@ -7,10 +7,12 @@ NS_ASSUME_NONNULL_BEGIN
 @interface ViewerInspectorPanelHost : NSObject <MeasurementPanelHost, NSWindowDelegate>
 
 - (instancetype)initWithViewer:(ViewerController *)viewer
-                           model:(LineOverlayModel *)model
+                           model:(nullable LineOverlayModel *)model
+                      guideState:(CompactGuideViewState *)guideState
                      guideEngine:(GuideEngine *)guideEngine
-                persistenceStore:(id<MeasurementPersistenceStore>)persistenceStore
+                persistenceStore:(nullable id<MeasurementPersistenceStore>)persistenceStore
              existingMeasurement:(nullable MeasurementRecord *)existingMeasurement
+                    cancellation:(nullable MedisalePanelHostCancellation)cancellation
                     invalidation:(MedisalePanelHostInvalidation)invalidation NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 

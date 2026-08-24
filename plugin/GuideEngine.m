@@ -1,5 +1,6 @@
 #import "GuideEngine.h"
 
+#import "CompactGuideLocalization.h"
 #import "GuidePreferenceStore.h"
 
 NSNotificationName const GuideEngineDidChangeNotification =
@@ -19,14 +20,12 @@ NSNotificationName const GuideEngineDidChangeNotification =
     self = [super init];
     if (self) {
         _preferenceStore = preferenceStore;
+        CompactGuideLocalization *localization =
+            [CompactGuideLocalization pluginLocalization];
         _shortInstructionsText =
-            @"1. Select two points.\n"
-             "2. Drag an endpoint to adjust it.\n"
-             "3. Press Escape to cancel the current operation.";
+            [localization stringForKey:@"guide.short.instructions"];
         _detailedInstructionsText =
-            @"Select points inside the displayed image.\n"
-             "Drag only a highlighted endpoint; other drags remain available to the active Horos tool.\n"
-             "The guide setting applies to every measurement inspector for this user.";
+            [localization stringForKey:@"guide.detailed.instructions"];
         _detailedGuideEnabled = preferenceStore.isDetailedGuideEnabled;
     }
     return self;

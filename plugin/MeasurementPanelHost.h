@@ -2,6 +2,7 @@
 
 @class LineOverlayModel;
 @class GuideEngine;
+@class CompactGuideViewState;
 @class MeasurementRecord;
 @class ViewerController;
 @protocol MeasurementPersistenceStore;
@@ -9,6 +10,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 typedef void (^MedisalePanelHostInvalidation)(void);
+typedef void (^MedisalePanelHostCancellation)(void);
 
 @protocol MeasurementPanelHost <NSObject>
 
@@ -16,11 +18,16 @@ typedef void (^MedisalePanelHostInvalidation)(void);
 @property(nonatomic, readonly, getter=isBound) BOOL bound;
 
 - (instancetype)initWithViewer:(ViewerController *)viewer
-                           model:(LineOverlayModel *)model
+                           model:(nullable LineOverlayModel *)model
+                      guideState:(CompactGuideViewState *)guideState
                      guideEngine:(GuideEngine *)guideEngine
-                persistenceStore:(id<MeasurementPersistenceStore>)persistenceStore
+                persistenceStore:(nullable id<MeasurementPersistenceStore>)persistenceStore
              existingMeasurement:(nullable MeasurementRecord *)existingMeasurement
+                    cancellation:(nullable MedisalePanelHostCancellation)cancellation
                     invalidation:(MedisalePanelHostInvalidation)invalidation;
+- (void)bindModel:(LineOverlayModel *)model
+ persistenceStore:(id<MeasurementPersistenceStore>)persistenceStore
+existingMeasurement:(nullable MeasurementRecord *)existingMeasurement;
 - (BOOL)present;
 - (void)invalidate;
 

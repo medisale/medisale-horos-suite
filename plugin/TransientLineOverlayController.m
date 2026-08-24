@@ -270,8 +270,17 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
     (void)error;
     ImageContext *expected = self.model.imageIdentity;
     return current != nil &&
+        [current.studyInstanceUID isEqualToString:expected.studyInstanceUID] &&
+        [current.seriesInstanceUID isEqualToString:expected.seriesInstanceUID] &&
         [current.sopInstanceUID isEqualToString:expected.sopInstanceUID] &&
         current.frameNumber == expected.frameNumber;
+}
+
+- (void)cancelCurrentInteraction
+{
+    if (self.draggingEndpoint || self.selectedEndpoint != MedisaleEndpointNone) {
+        [self cancelEndpointDragRestoring:YES];
+    }
 }
 
 - (void)selectEndpoint:(MedisaleEndpoint)endpoint

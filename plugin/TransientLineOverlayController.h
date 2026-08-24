@@ -18,6 +18,7 @@ typedef void (^MedisaleOverlayInvalidation)(void);
                     invalidation:(MedisaleOverlayInvalidation)invalidation NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 - (BOOL)start;
+- (void)cancelCurrentInteraction;
 - (void)invalidate;
 
 @end

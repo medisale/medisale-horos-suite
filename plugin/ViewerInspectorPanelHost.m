@@ -1,87 +1,119 @@
 #import "ViewerInspectorPanelHost.h"
 
+#import "CompactGuideLayoutPolicy.h"
+#import "CompactGuideLocalization.h"
+#import "CompactGuidePresentation.h"
+#import "CompactGuideViewState.h"
 #import "GuideEngine.h"
 #import "LineOverlayModel.h"
 #import "MeasurementPersistenceStore.h"
 #import "MeasurementRecord.h"
 #import <ViewerController.h>
 
-static NSString *MedisaleInputStateText(LineOverlayInputState state)
-{
-    switch (state) {
-        case LineOverlayInputStateEndpointASelected:
-            return @"Endpoint A selected";
-        case LineOverlayInputStateEndpointBSelected:
-            return @"Endpoint B selected";
-        case LineOverlayInputStateEditingEndpointA:
-            return @"Editing endpoint A";
-        case LineOverlayInputStateEditingEndpointB:
-            return @"Editing endpoint B";
-        case LineOverlayInputStateComplete:
-        default:
-            return @"Complete";
-    }
-}
-
 @interface ViewerInspectorPanelHost ()
 @property(nonatomic, weak) ViewerController *viewer;
-@property(nonatomic, strong) LineOverlayModel *model;
+@property(nonatomic, strong, nullable) LineOverlayModel *model;
+@property(nonatomic, strong) CompactGuideViewState *guideState;
 @property(nonatomic, strong) GuideEngine *guideEngine;
-@property(nonatomic, strong) id<MeasurementPersistenceStore> persistenceStore;
+@property(nonatomic, strong) CompactGuideLocalization *localization;
+@property(nonatomic, strong, nullable) id<MeasurementPersistenceStore> persistenceStore;
 @property(nonatomic, copy) NSString *measurementID;
 @property(nonatomic, copy) NSDate *createdAt;
+@property(nonatomic, copy, nullable) MedisalePanelHostCancellation cancellation;
 @property(nonatomic, copy) MedisalePanelHostInvalidation invalidation;
 @property(nonatomic, strong) NSPanel *panel;
-@property(nonatomic, strong) NSTextField *pointAField;
-@property(nonatomic, strong) NSTextField *pointBField;
-@property(nonatomic, strong) NSTextField *distanceField;
-@property(nonatomic, strong) NSTextField *stateField;
-@property(nonatomic, strong) NSTextField *bindingField;
-@property(nonatomic, strong) NSTextField *shortInstructionsField;
-@property(nonatomic, strong) NSButton *detailedGuideToggle;
-@property(nonatomic, strong) NSTextField *detailedInstructionsField;
+@property(nonatomic, strong) NSTextField *modeField;
+@property(nonatomic, strong) NSTextField *instructionField;
+@property(nonatomic, strong) NSTextField *progressField;
+@property(nonatomic, strong) NSImageView *calibrationIcon;
+@property(nonatomic, strong) NSTextField *calibrationField;
+@property(nonatomic, strong) NSImageView *confirmationIcon;
+@property(nonatomic, strong) NSTextField *confirmationField;
+@property(nonatomic, strong) NSButton *detailsButton;
+@property(nonatomic, strong) NSButton *cancelButton;
+@property(nonatomic, strong) NSButton *confirmButton;
+@property(nonatomic, strong) NSScrollView *detailsScrollView;
+@property(nonatomic, strong) NSTextField *detailsField;
 @property(nonatomic, strong) NSButton *saveButton;
 @property(nonatomic, strong) NSTextField *saveStatusField;
 @property(nonatomic, strong) NSMutableArray *observers;
+@property(nonatomic, strong, nullable) id modelObserver;
 @property(nonatomic, readwrite, getter=isBound) BOOL bound;
 @property(nonatomic) BOOL userClosed;
 @property(nonatomic) BOOL hasSaved;
 @property(nonatomic) BOOL restoredMeasurement;
 @property(nonatomic) NSPoint savedPointA;
 @property(nonatomic) NSPoint savedPointB;
+@property(nonatomic) NSPoint editOriginA;
+@property(nonatomic) NSPoint editOriginB;
+@property(nonatomic) LineOverlayInputState previousInputState;
+@property(nonatomic) CompactGuideMeasurementState lastAnnouncedState;
 @end
 
 @implementation ViewerInspectorPanelHost
 
 - (instancetype)initWithViewer:(ViewerController *)viewer
                            model:(LineOverlayModel *)model
+                      guideState:(CompactGuideViewState *)guideState
                      guideEngine:(GuideEngine *)guideEngine
                 persistenceStore:(id<MeasurementPersistenceStore>)persistenceStore
              existingMeasurement:(MeasurementRecord *)existingMeasurement
+                    cancellation:(MedisalePanelHostCancellation)cancellation
                     invalidation:(MedisalePanelHostInvalidation)invalidation
 {
     self = [super init];
     if (self) {
         _viewer = viewer;
         _model = model;
+        _guideState = guideState;
         _guideEngine = guideEngine;
+        _localization = [CompactGuideLocalization pluginLocalization];
         _persistenceStore = persistenceStore;
         _measurementID = existingMeasurement == nil
             ? NSUUID.UUID.UUIDString : existingMeasurement.measurementID;
         _createdAt = existingMeasurement == nil
             ? [NSDate date] : existingMeasurement.createdAt;
-        _hasSaved = existingMeasurement != nil;
-        _restoredMeasurement = existingMeasurement != nil;
-        if (existingMeasurement != nil) {
-            _savedPointA = NSMakePoint(existingMeasurement.endpointAX,
-                                      existingMeasurement.endpointAY);
-            _savedPointB = NSMakePoint(existingMeasurement.endpointBX,
-                                      existingMeasurement.endpointBY);
-        }
+        _cancellation = [cancellation copy];
         _invalidation = [invalidation copy];
         _observers = [NSMutableArray array];
+        _lastAnnouncedState = guideState.measurementState;
+        [self applyExistingMeasurement:existingMeasurement];
+        if (model != nil) {
+            _previousInputState = model.inputState;
+        }
     }
     return self;
+}
+
+- (void)applyExistingMeasurement:(MeasurementRecord *)existingMeasurement
+{
+    self.hasSaved = existingMeasurement != nil;
+    self.restoredMeasurement = existingMeasurement != nil;
+    if (existingMeasurement != nil) {
+        self.measurementID = existingMeasurement.measurementID;
+        self.createdAt = existingMeasurement.createdAt;
+        self.savedPointA = NSMakePoint(existingMeasurement.endpointAX,
+                                      existingMeasurement.endpointAY);
+        self.savedPointB = NSMakePoint(existingMeasurement.endpointBX,
+                                      existingMeasurement.endpointBY);
+    }
+}
+
+- (void)bindModel:(LineOverlayModel *)model
+ persistenceStore:(id<MeasurementPersistenceStore>)persistenceStore
+existingMeasurement:(MeasurementRecord *)existingMeasurement
+{
+    [self removeModelObserver];
+    self.model = model;
+    self.persistenceStore = persistenceStore;
+    self.previousInputState = model.inputState;
+    self.editOriginA = model.pointA;
+    self.editOriginB = model.pointB;
+    [self applyExistingMeasurement:existingMeasurement];
+    if (self.bound) {
+        [self installModelObserver];
+    }
+    [self updateFieldsAndLayout:YES];
 }
 
 - (BOOL)isVisible
@@ -93,8 +125,8 @@ static NSString *MedisaleInputStateText(LineOverlayInputState state)
 {
     ViewerController *viewer = self.viewer;
     NSWindow *viewerWindow = viewer.window;
-    if (viewer == nil || viewerWindow == nil || self.model == nil ||
-        self.guideEngine == nil || self.persistenceStore == nil) {
+    if (viewer == nil || viewerWindow == nil || self.guideState == nil ||
+        self.guideEngine == nil) {
         return NO;
     }
     if (self.panel == nil) {
@@ -103,15 +135,25 @@ static NSString *MedisaleInputStateText(LineOverlayInputState state)
     }
     self.bound = YES;
     self.userClosed = NO;
-    [self updateFields];
+    [self installModelObserver];
+    [self updateFieldsAndLayout:NO];
     [self followViewerWindow];
     [self.panel orderFront:nil];
     return YES;
 }
 
+- (NSTextField *)wrappingLabel
+{
+    NSTextField *field = [NSTextField labelWithString:@""];
+    field.lineBreakMode = NSLineBreakByWordWrapping;
+    field.maximumNumberOfLines = 0;
+    field.cell.wraps = YES;
+    return field;
+}
+
 - (void)buildPanel
 {
-    NSRect frame = NSMakeRect(0.0, 0.0, 370.0, 550.0);
+    NSRect frame = NSMakeRect(0.0, 0.0, 248.0, 124.0);
     NSWindowStyleMask style = NSWindowStyleMaskTitled |
         NSWindowStyleMaskClosable |
         NSWindowStyleMaskUtilityWindow |
@@ -120,7 +162,7 @@ static NSString *MedisaleInputStateText(LineOverlayInputState state)
                                                 styleMask:style
                                                   backing:NSBackingStoreBuffered
                                                     defer:NO];
-    panel.title = @"Medisale Measurement";
+    panel.title = [self.localization stringForKey:@"guide.panel.title"];
     panel.releasedWhenClosed = NO;
     panel.floatingPanel = YES;
     panel.becomesKeyOnlyIfNeeded = YES;
@@ -130,95 +172,94 @@ static NSString *MedisaleInputStateText(LineOverlayInputState state)
     panel.delegate = self;
 
     NSView *content = [[NSView alloc] initWithFrame:frame];
+    content.autoresizesSubviews = YES;
     panel.contentView = content;
 
-    NSTextField *heading = [NSTextField labelWithString:@"Transient measurement"];
-    heading.font = [NSFont systemFontOfSize:15.0 weight:NSFontWeightSemibold];
-    self.pointAField = [NSTextField labelWithString:@""];
-    self.pointBField = [NSTextField labelWithString:@""];
-    self.distanceField = [NSTextField labelWithString:@""];
-    self.stateField = [NSTextField labelWithString:@""];
-    self.bindingField = [NSTextField labelWithString:@""];
-    self.bindingField.textColor = NSColor.secondaryLabelColor;
-    NSTextField *shortHeading = [NSTextField labelWithString:@"Quick instructions"];
-    shortHeading.font = [NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold];
-    self.shortInstructionsField = [NSTextField labelWithString:@""];
-    self.shortInstructionsField.lineBreakMode = NSLineBreakByWordWrapping;
-    self.shortInstructionsField.maximumNumberOfLines = 0;
-    self.detailedGuideToggle = [NSButton
-        checkboxWithTitle:@"Show detailed guide"
-                    target:self
-                    action:@selector(detailedGuideToggled:)];
-    self.detailedInstructionsField = [NSTextField labelWithString:@""];
-    self.detailedInstructionsField.textColor = NSColor.secondaryLabelColor;
-    self.detailedInstructionsField.lineBreakMode = NSLineBreakByWordWrapping;
-    self.detailedInstructionsField.maximumNumberOfLines = 0;
-    self.saveButton = [NSButton buttonWithTitle:@"Save spike measurement"
-                                         target:self
-                                         action:@selector(saveMeasurement:)];
-    self.saveStatusField = [NSTextField labelWithString:
-        self.restoredMeasurement ? @"Restored from spike store" : @"Not saved"];
+    self.modeField = [self wrappingLabel];
+    self.modeField.font = [NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold];
+    self.instructionField = [self wrappingLabel];
+    self.instructionField.font = [NSFont systemFontOfSize:11.5];
+    self.progressField = [self wrappingLabel];
+    self.progressField.font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightMedium];
+    self.calibrationIcon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    self.calibrationField = [self wrappingLabel];
+    self.calibrationField.font = [NSFont systemFontOfSize:10.5];
+    self.confirmationIcon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    self.confirmationField = [self wrappingLabel];
+    self.confirmationField.font = [NSFont systemFontOfSize:10.5];
+
+    self.detailsButton = [NSButton buttonWithTitle:@"" target:self
+                                           action:@selector(toggleDetails:)];
+    self.cancelButton = [NSButton buttonWithTitle:@"" target:self
+                                          action:@selector(cancelPressed:)];
+    self.confirmButton = [NSButton buttonWithTitle:@"" target:self
+                                           action:@selector(confirmPressed:)];
+    for (NSButton *button in @[self.detailsButton, self.cancelButton,
+                              self.confirmButton]) {
+        button.bezelStyle = NSBezelStyleRounded;
+        button.controlSize = NSControlSizeSmall;
+    }
+
+    self.detailsField = [self wrappingLabel];
+    self.detailsField.font = [NSFont systemFontOfSize:11.0];
+    self.detailsField.textColor = NSColor.secondaryLabelColor;
+    NSView *documentView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 240, 200)];
+    [documentView addSubview:self.detailsField];
+    self.detailsScrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    self.detailsScrollView.hasVerticalScroller = YES;
+    self.detailsScrollView.borderType = NSNoBorder;
+    self.detailsScrollView.drawsBackground = NO;
+    self.detailsScrollView.documentView = documentView;
+
+    self.saveButton = [NSButton buttonWithTitle:
+        [self.localization stringForKey:@"guide.button.saveSpike"]
+                                         target:self action:@selector(saveMeasurement:)];
+    self.saveButton.controlSize = NSControlSizeSmall;
+    self.saveStatusField = [self wrappingLabel];
+    self.saveStatusField.font = [NSFont systemFontOfSize:9.5];
     self.saveStatusField.textColor = NSColor.secondaryLabelColor;
 
-    NSArray<NSTextField *> *fields = @[
-        heading, self.pointAField, self.pointBField,
-        self.distanceField, self.stateField, self.bindingField,
-        shortHeading, self.shortInstructionsField, self.detailedInstructionsField,
-        self.saveStatusField
-    ];
-    for (NSTextField *field in fields) {
-        field.translatesAutoresizingMaskIntoConstraints = NO;
-        field.lineBreakMode = NSLineBreakByTruncatingTail;
-        [content addSubview:field];
+    for (NSView *view in @[self.modeField, self.instructionField,
+                          self.progressField, self.calibrationIcon,
+                          self.calibrationField, self.confirmationIcon,
+                          self.confirmationField, self.detailsButton,
+                          self.cancelButton, self.confirmButton,
+                          self.detailsScrollView, self.saveButton,
+                          self.saveStatusField]) {
+        [content addSubview:view];
     }
-    self.detailedGuideToggle.translatesAutoresizingMaskIntoConstraints = NO;
-    [content addSubview:self.detailedGuideToggle];
-    self.saveButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [content addSubview:self.saveButton];
-    self.pointAField.font = [NSFont monospacedDigitSystemFontOfSize:13.0
-                                                             weight:NSFontWeightRegular];
-    self.pointBField.font = self.pointAField.font;
-    self.distanceField.font = self.pointAField.font;
 
-    [NSLayoutConstraint activateConstraints:@[
-        [heading.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:18.0],
-        [heading.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-18.0],
-        [heading.topAnchor constraintEqualToAnchor:content.topAnchor constant:18.0],
-        [self.pointAField.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
-        [self.pointAField.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
-        [self.pointAField.topAnchor constraintEqualToAnchor:heading.bottomAnchor constant:18.0],
-        [self.pointBField.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
-        [self.pointBField.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
-        [self.pointBField.topAnchor constraintEqualToAnchor:self.pointAField.bottomAnchor constant:10.0],
-        [self.distanceField.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
-        [self.distanceField.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
-        [self.distanceField.topAnchor constraintEqualToAnchor:self.pointBField.bottomAnchor constant:10.0],
-        [self.stateField.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
-        [self.stateField.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
-        [self.stateField.topAnchor constraintEqualToAnchor:self.distanceField.bottomAnchor constant:16.0],
-        [self.bindingField.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
-        [self.bindingField.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
-        [self.bindingField.topAnchor constraintEqualToAnchor:self.stateField.bottomAnchor constant:10.0],
-        [shortHeading.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
-        [shortHeading.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
-        [shortHeading.topAnchor constraintEqualToAnchor:self.bindingField.bottomAnchor constant:18.0],
-        [self.shortInstructionsField.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
-        [self.shortInstructionsField.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
-        [self.shortInstructionsField.topAnchor constraintEqualToAnchor:shortHeading.bottomAnchor constant:8.0],
-        [self.detailedGuideToggle.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
-        [self.detailedGuideToggle.trailingAnchor constraintLessThanOrEqualToAnchor:heading.trailingAnchor],
-        [self.detailedGuideToggle.topAnchor constraintEqualToAnchor:self.shortInstructionsField.bottomAnchor constant:16.0],
-        [self.detailedInstructionsField.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
-        [self.detailedInstructionsField.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
-        [self.detailedInstructionsField.topAnchor constraintEqualToAnchor:self.detailedGuideToggle.bottomAnchor constant:8.0],
-        [self.saveButton.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
-        [self.saveButton.topAnchor constraintGreaterThanOrEqualToAnchor:self.detailedInstructionsField.bottomAnchor constant:16.0],
-        [self.saveStatusField.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
-        [self.saveStatusField.trailingAnchor constraintEqualToAnchor:heading.trailingAnchor],
-        [self.saveStatusField.topAnchor constraintEqualToAnchor:self.saveButton.bottomAnchor constant:8.0],
-        [self.saveStatusField.bottomAnchor constraintLessThanOrEqualToAnchor:content.bottomAnchor constant:-18.0],
-    ]];
+    [self configureAccessibility];
+    self.detailsButton.nextKeyView = self.cancelButton;
+    self.cancelButton.nextKeyView = self.confirmButton;
+    self.confirmButton.nextKeyView = self.detailsButton;
     self.panel = panel;
+}
+
+- (void)configureAccessibility
+{
+    CompactGuideLocalization *l = self.localization;
+    self.modeField.accessibilityLabel = [l stringForKey:@"guide.access.mode.label"];
+    self.instructionField.accessibilityLabel =
+        [l stringForKey:@"guide.access.instruction.label"];
+    self.progressField.accessibilityLabel =
+        [l stringForKey:@"guide.access.progress.label"];
+    self.calibrationField.accessibilityLabel =
+        [l stringForKey:@"guide.access.calibration.label"];
+    self.calibrationField.accessibilityHelp =
+        [l stringForKey:@"guide.access.calibration.help"];
+    self.confirmationField.accessibilityLabel =
+        [l stringForKey:@"guide.access.confirmation.label"];
+    self.confirmationField.accessibilityHelp =
+        [l stringForKey:@"guide.access.confirmation.help"];
+    self.detailsButton.accessibilityHelp =
+        [l stringForKey:@"guide.access.details.help"];
+    self.cancelButton.accessibilityHelp =
+        [l stringForKey:@"guide.access.cancel.help"];
+    self.confirmButton.accessibilityHelp =
+        [l stringForKey:@"guide.access.confirm.help"];
+    self.saveButton.accessibilityHelp =
+        [l stringForKey:@"guide.access.save.help"];
 }
 
 - (void)installObserversForViewerWindow:(NSWindow *)viewerWindow
@@ -226,38 +267,32 @@ static NSString *MedisaleInputStateText(LineOverlayInputState state)
     NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
     __weak typeof(self) weakSelf = self;
     [self.observers addObject:[center
-        addObserverForName:LineOverlayModelDidChangeNotification
-        object:self.model
-        queue:[NSOperationQueue mainQueue]
+        addObserverForName:CompactGuideViewStateDidChangeNotification
+        object:self.guideState queue:NSOperationQueue.mainQueue
         usingBlock:^(NSNotification *notification) {
             (void)notification;
-            [weakSelf updateFields];
+            [weakSelf updateFieldsAndLayout:YES];
         }]];
     [self.observers addObject:[center
         addObserverForName:GuideEngineDidChangeNotification
-        object:self.guideEngine
-        queue:[NSOperationQueue mainQueue]
+        object:self.guideEngine queue:NSOperationQueue.mainQueue
         usingBlock:^(NSNotification *notification) {
             (void)notification;
-            [weakSelf updateGuideFields];
+            [weakSelf updateFieldsAndLayout:NO];
         }]];
-    NSArray<NSNotificationName> *followNotifications = @[
-        NSWindowDidMoveNotification, NSWindowDidResizeNotification,
-        NSWindowDidChangeScreenNotification
-    ];
-    for (NSNotificationName name in followNotifications) {
-        [self.observers addObject:[center
-            addObserverForName:name object:viewerWindow queue:[NSOperationQueue mainQueue]
-            usingBlock:^(NSNotification *notification) {
+    for (NSNotificationName name in @[NSWindowDidMoveNotification,
+                                      NSWindowDidResizeNotification,
+                                      NSWindowDidChangeScreenNotification]) {
+        [self.observers addObject:[center addObserverForName:name object:viewerWindow
+            queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *notification) {
                 (void)notification;
+                [weakSelf updateFieldsAndLayout:NO];
                 [weakSelf followViewerWindow];
             }]];
     }
     [self.observers addObject:[center
-        addObserverForName:NSWindowDidBecomeKeyNotification
-        object:viewerWindow
-        queue:[NSOperationQueue mainQueue]
-        usingBlock:^(NSNotification *notification) {
+        addObserverForName:NSWindowDidBecomeKeyNotification object:viewerWindow
+        queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *notification) {
             (void)notification;
             typeof(self) self = weakSelf;
             if (self != nil && self.bound && !self.userClosed) {
@@ -266,76 +301,283 @@ static NSString *MedisaleInputStateText(LineOverlayInputState state)
             }
         }]];
     [self.observers addObject:[center
-        addObserverForName:NSWindowDidResignKeyNotification
-        object:viewerWindow
-        queue:[NSOperationQueue mainQueue]
-        usingBlock:^(NSNotification *notification) {
+        addObserverForName:NSWindowDidResignKeyNotification object:viewerWindow
+        queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *notification) {
             (void)notification;
             [weakSelf.panel orderOut:nil];
         }]];
     [self.observers addObject:[center
-        addObserverForName:NSWindowWillCloseNotification
-        object:viewerWindow
-        queue:[NSOperationQueue mainQueue]
-        usingBlock:^(NSNotification *notification) {
+        addObserverForName:NSWindowWillCloseNotification object:viewerWindow
+        queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *notification) {
             (void)notification;
             [weakSelf invalidate];
         }]];
 }
 
-- (void)updateFields
+- (void)installModelObserver
 {
-    LineOverlayModel *model = self.model;
-    if (model == nil || self.panel == nil) {
+    if (self.modelObserver != nil || self.model == nil) {
         return;
     }
-    self.pointAField.stringValue = [NSString stringWithFormat:
-        @"Endpoint A   %.2f, %.2f", model.pointA.x, model.pointA.y];
-    self.pointBField.stringValue = [NSString stringWithFormat:
-        @"Endpoint B   %.2f, %.2f", model.pointB.x, model.pointB.y];
-    self.distanceField.stringValue = [NSString stringWithFormat:
-        @"Pixel distance   %.2f px", model.pixelDistance];
-    self.stateField.stringValue = [NSString stringWithFormat:
-        @"Input state   %@", MedisaleInputStateText(model.inputState)];
-    self.bindingField.stringValue = self.bound
-        ? @"Binding   owning Viewer / current synthetic image"
-        : @"Binding   unbound";
-    self.saveButton.enabled = model.inputState == LineOverlayInputStateComplete;
-    if (self.hasSaved) {
-        BOOL unchanged = NSEqualPoints(model.pointA, self.savedPointA) &&
-            NSEqualPoints(model.pointB, self.savedPointB);
-        self.saveStatusField.stringValue = unchanged
-            ? (self.restoredMeasurement ? @"Restored from spike store" : @"Save OK")
-            : @"Unsaved endpoint changes";
+    __weak typeof(self) weakSelf = self;
+    self.modelObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:LineOverlayModelDidChangeNotification object:self.model
+        queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *notification) {
+            (void)notification;
+            [weakSelf modelDidChange];
+        }];
+}
+
+- (void)removeModelObserver
+{
+    if (self.modelObserver != nil) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self.modelObserver];
+        self.modelObserver = nil;
     }
-    [self updateGuideFields];
+}
+
+- (void)modelDidChange
+{
+    LineOverlayModel *model = self.model;
+    if (model == nil) {
+        return;
+    }
+    BOOL editing = model.inputState == LineOverlayInputStateEditingEndpointA ||
+        model.inputState == LineOverlayInputStateEditingEndpointB;
+    BOOL wasEditing = self.previousInputState == LineOverlayInputStateEditingEndpointA ||
+        self.previousInputState == LineOverlayInputStateEditingEndpointB;
+    if (editing && !wasEditing) {
+        self.editOriginA = model.pointA;
+        self.editOriginB = model.pointB;
+        [self.guideState beginEditing];
+    } else if (!editing && wasEditing) {
+        BOOL changed = !NSEqualPoints(self.editOriginA, model.pointA) ||
+            !NSEqualPoints(self.editOriginB, model.pointB);
+        [self.guideState finishEditingChanged:changed];
+    }
+    self.previousInputState = model.inputState;
+    [self updateFieldsAndLayout:NO];
+}
+
+- (NSString *)progressTextForState:(CompactGuideMeasurementState)state
+{
+    CompactGuideLocalization *l = self.localization;
+    NSString *key = [CompactGuidePresentation
+        progressKeyForMeasurementState:state];
+    if (state == CompactGuideMeasurementStateCollecting) {
+        return [NSString stringWithFormat:
+            [l stringForKey:key],
+            (unsigned long)self.guideState.collectedPointCount];
+    }
+    return [l stringForKey:key];
+}
+
+- (void)updateFieldsAndLayout:(BOOL)announceStateChange
+{
+    if (self.panel == nil) {
+        return;
+    }
+    CompactGuideLocalization *l = self.localization;
+    CompactGuideViewState *state = self.guideState;
+    self.modeField.stringValue = [l stringForKey:@"guide.mode"];
+    NSString *instructionKey = [CompactGuidePresentation
+        instructionKeyForMeasurementState:state.measurementState
+        pointCount:state.collectedPointCount];
+    self.instructionField.stringValue = [l stringForKey:instructionKey];
+    self.progressField.stringValue = [self progressTextForState:state.measurementState];
+
+    NSString *calibrationKey = [CompactGuidePresentation
+        compactCalibrationValueKeyForState:state.calibrationState];
+    NSString *calibrationIconName = NSImageNameStatusUnavailable;
+    if (state.calibrationState == CompactGuideCalibrationStateCalibrated) {
+        calibrationIconName = NSImageNameStatusAvailable;
+    } else if (state.calibrationState == CompactGuideCalibrationStateDICOMSpacingOnly) {
+        calibrationIconName = NSImageNameStatusPartiallyAvailable;
+    }
+    self.calibrationIcon.image = [NSImage imageNamed:calibrationIconName];
+    self.calibrationField.stringValue = [NSString stringWithFormat:@"%@: %@",
+        [l stringForKey:@"guide.calibration.compact.label"],
+        [l stringForKey:calibrationKey]];
+
+    NSString *confirmationKey = [CompactGuidePresentation
+        compactConfirmationValueKeyForState:state.confirmationState];
+    NSString *confirmationIconName = NSImageNameStatusPartiallyAvailable;
+    if (state.confirmationState == CompactGuideConfirmationStateUserConfirmed) {
+        confirmationIconName = NSImageNameStatusAvailable;
+    } else if (state.confirmationState ==
+               CompactGuideConfirmationStateModifiedAfterConfirmation) {
+        confirmationIconName = NSImageNameStatusPartiallyAvailable;
+    }
+    self.confirmationIcon.image = [NSImage imageNamed:confirmationIconName];
+    self.confirmationField.stringValue = [NSString stringWithFormat:@"%@: %@",
+        [l stringForKey:@"guide.confirmation.compact.label"],
+        [l stringForKey:confirmationKey]];
+
+    switch ([CompactGuidePresentation
+        semanticRoleForMeasurementState:state.measurementState]) {
+        case CompactGuideSemanticRoleActive:
+            self.progressField.textColor = NSColor.systemBlueColor;
+            break;
+        case CompactGuideSemanticRoleAttention:
+            self.progressField.textColor = NSColor.systemOrangeColor;
+            break;
+        case CompactGuideSemanticRoleConfirmed:
+            self.progressField.textColor = NSColor.systemGreenColor;
+            break;
+        case CompactGuideSemanticRoleUnavailable:
+            self.progressField.textColor = NSColor.systemRedColor;
+            break;
+        case CompactGuideSemanticRoleNeutral:
+        default:
+            self.progressField.textColor = NSColor.secondaryLabelColor;
+            break;
+    }
+
+    self.detailsButton.title = [l stringForKey:state.isExpanded
+        ? @"guide.button.hideDetails" : @"guide.button.details"];
+    self.cancelButton.title = [l stringForKey:@"guide.button.cancel"];
+    self.confirmButton.title = [l stringForKey:@"guide.button.confirm"];
+    self.cancelButton.hidden = !state.canCancel;
+    self.confirmButton.hidden = !state.canConfirm;
+    self.detailsScrollView.hidden = !state.isExpanded;
+    self.saveButton.hidden = !state.isExpanded || self.model == nil ||
+        self.persistenceStore == nil;
+    self.saveStatusField.hidden = self.saveButton.hidden;
+
+    if (self.model == nil) {
+        self.detailsField.stringValue = [NSString stringWithFormat:@"%@\n\n%@",
+            [l stringForKey:@"guide.details.body"],
+            [l stringForKey:@"guide.details.collecting"]];
+    } else {
+        NSString *coordinates = [NSString stringWithFormat:
+            [l stringForKey:@"guide.details.coordinates.format"],
+            self.model.pointA.x, self.model.pointA.y,
+            self.model.pointB.x, self.model.pointB.y,
+            self.model.pixelDistance];
+        self.detailsField.stringValue = [NSString stringWithFormat:@"%@\n\n%@",
+            [l stringForKey:@"guide.details.body"], coordinates];
+        self.saveButton.enabled = self.model.inputState == LineOverlayInputStateComplete;
+        if (self.hasSaved) {
+            BOOL unchanged = NSEqualPoints(self.model.pointA, self.savedPointA) &&
+                NSEqualPoints(self.model.pointB, self.savedPointB);
+            self.saveStatusField.stringValue = [l stringForKey:unchanged
+                ? (self.restoredMeasurement ? @"guide.save.restored" : @"guide.save.ok")
+                : @"guide.save.changed"];
+        } else if (self.saveStatusField.stringValue.length == 0) {
+            self.saveStatusField.stringValue = [l stringForKey:@"guide.save.notSaved"];
+        }
+    }
+    [self updatePanelLayout];
+    if (announceStateChange && self.lastAnnouncedState != state.measurementState) {
+        self.lastAnnouncedState = state.measurementState;
+        NSAccessibilityPostNotification(self.progressField,
+                                        NSAccessibilityValueChangedNotification);
+    }
+}
+
+- (void)updatePanelLayout
+{
+    NSWindow *viewerWindow = self.viewer.window;
+    NSSize viewerSize = viewerWindow == nil ? NSMakeSize(640, 480)
+                                             : viewerWindow.contentLayoutRect.size;
+    NSSize contentSize = self.guideState.isExpanded
+        ? [CompactGuideLayoutPolicy expandedContentSizeForViewerContentSize:viewerSize]
+        : [CompactGuideLayoutPolicy compactContentSizeForViewerContentSize:viewerSize];
+    [self.panel setContentSize:contentSize];
+    NSView *content = self.panel.contentView;
+    CGFloat width = content.bounds.size.width;
+    CGFloat height = content.bounds.size.height;
+    CGFloat inset = 8.0;
+    CGFloat coreBottom = MAX(0.0, height - 124.0);
+    CGFloat usable = width - inset * 2.0;
+    self.modeField.frame = NSMakeRect(inset, coreBottom + 101.0, usable, 16.0);
+    self.instructionField.frame = NSMakeRect(inset, coreBottom + 70.0, usable, 29.0);
+    self.progressField.frame = NSMakeRect(inset, coreBottom + 52.0, usable, 16.0);
+    CGFloat statusWidth = floor((usable - 6.0) * 0.5);
+    self.calibrationIcon.frame = NSMakeRect(inset, coreBottom + 33.0, 14.0, 14.0);
+    self.calibrationField.frame = NSMakeRect(inset + 16.0, coreBottom + 31.0,
+                                             statusWidth - 16.0, 18.0);
+    CGFloat confirmationX = inset + statusWidth + 6.0;
+    self.confirmationIcon.frame = NSMakeRect(confirmationX, coreBottom + 33.0,
+                                             14.0, 14.0);
+    self.confirmationField.frame = NSMakeRect(confirmationX + 16.0,
+                                              coreBottom + 31.0,
+                                              statusWidth - 16.0, 18.0);
+    self.detailsButton.frame = NSMakeRect(inset, coreBottom + 3.0, 78.0, 24.0);
+    self.cancelButton.frame = NSMakeRect(MAX(inset + 80.0, width - 162.0),
+                                         coreBottom + 3.0, 76.0, 24.0);
+    self.confirmButton.frame = NSMakeRect(width - inset - 78.0,
+                                          coreBottom + 3.0, 78.0, 24.0);
+
+    CGFloat detailsHeight = MAX(0.0, coreBottom - 42.0);
+    self.detailsScrollView.frame = NSMakeRect(inset, 36.0, usable, detailsHeight);
+    NSView *documentView = self.detailsScrollView.documentView;
+    CGFloat documentWidth = MAX(120.0, usable - 14.0);
+    CGFloat textHeight = MAX(detailsHeight,
+        [self.detailsField sizeThatFits:NSMakeSize(documentWidth, CGFLOAT_MAX)].height + 8.0);
+    documentView.frame = NSMakeRect(0, 0, documentWidth, textHeight);
+    self.detailsField.frame = NSMakeRect(0, 4.0, documentWidth, textHeight - 4.0);
+    self.saveButton.frame = NSMakeRect(inset, 7.0, 126.0, 24.0);
+    self.saveStatusField.frame = NSMakeRect(inset + 132.0, 8.0,
+                                            MAX(0.0, usable - 132.0), 20.0);
+}
+
+- (void)toggleDetails:(id)sender
+{
+    (void)sender;
+    [self.guideState setExpanded:!self.guideState.isExpanded];
+    [self followViewerWindow];
+}
+
+- (void)cancelPressed:(id)sender
+{
+    (void)sender;
+    CompactGuideViewState *state = self.guideState;
+    MedisalePanelHostCancellation cancellation = self.cancellation;
+    if (cancellation != nil) {
+        cancellation();
+    }
+    [state cancelCurrentOperation];
+    if (state.measurementState == CompactGuideMeasurementStateCancelled) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                     (int64_t)(0.8 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [state settleCancellationToIdle];
+        });
+    }
+}
+
+- (void)confirmPressed:(id)sender
+{
+    (void)sender;
+    if (![self.guideState confirm]) {
+        NSBeep();
+    }
 }
 
 - (void)saveMeasurement:(id)sender
 {
     (void)sender;
     LineOverlayModel *model = self.model;
-    if (model == nil || model.inputState != LineOverlayInputStateComplete) {
-        self.saveStatusField.stringValue = @"Save unavailable while editing";
+    id<MeasurementPersistenceStore> store = self.persistenceStore;
+    CompactGuideLocalization *l = self.localization;
+    if (model == nil || store == nil ||
+        model.inputState != LineOverlayInputStateComplete) {
+        self.saveStatusField.stringValue = [l stringForKey:@"guide.save.unavailable"];
         NSBeep();
         return;
     }
-    NSDate *updatedAt = [NSDate date];
     MeasurementRecord *record = [[MeasurementRecord alloc]
-        initWithMeasurementID:self.measurementID
-                 imageContext:model.imageIdentity
-                    endpointAX:model.pointA.x
-                    endpointAY:model.pointA.y
-                    endpointBX:model.pointB.x
-                    endpointBY:model.pointB.y
+        initWithMeasurementID:self.measurementID imageContext:model.imageIdentity
+                    endpointAX:model.pointA.x endpointAY:model.pointA.y
+                    endpointBX:model.pointB.x endpointBY:model.pointB.y
                   pixelDistance:model.pixelDistance
                   schemaVersion:MedisaleMeasurementSchemaVersion
-                      createdAt:self.createdAt
-                      updatedAt:updatedAt];
+                      createdAt:self.createdAt updatedAt:[NSDate date]];
     NSError *error = nil;
-    if (![self.persistenceStore saveMeasurement:record error:&error]) {
+    if (![store saveMeasurement:record error:&error]) {
         (void)error;
-        self.saveStatusField.stringValue = @"Save failed; no record committed";
+        self.saveStatusField.stringValue = [l stringForKey:@"guide.save.failed"];
         NSBeep();
         return;
     }
@@ -343,32 +585,7 @@ static NSString *MedisaleInputStateText(LineOverlayInputState state)
     self.restoredMeasurement = NO;
     self.savedPointA = model.pointA;
     self.savedPointB = model.pointB;
-    self.saveStatusField.stringValue = @"Save OK";
-}
-
-- (void)updateGuideFields
-{
-    GuideEngine *guideEngine = self.guideEngine;
-    if (guideEngine == nil || self.panel == nil) {
-        return;
-    }
-    self.shortInstructionsField.stringValue = guideEngine.shortInstructionsText;
-    BOOL enabled = guideEngine.isDetailedGuideEnabled;
-    self.detailedGuideToggle.state = enabled
-        ? NSControlStateValueOn : NSControlStateValueOff;
-    self.detailedInstructionsField.stringValue = guideEngine.detailedInstructionsText;
-    self.detailedInstructionsField.hidden = !enabled;
-}
-
-- (void)detailedGuideToggled:(NSButton *)sender
-{
-    BOOL enabled = sender.state == NSControlStateValueOn;
-    NSError *error = nil;
-    if (![self.guideEngine setDetailedGuideEnabled:enabled error:&error]) {
-        (void)error;
-        NSBeep();
-    }
-    [self updateGuideFields];
+    self.saveStatusField.stringValue = [l stringForKey:@"guide.save.ok"];
 }
 
 - (void)followViewerWindow
@@ -378,17 +595,14 @@ static NSString *MedisaleInputStateText(LineOverlayInputState state)
     if (viewerWindow == nil || panel == nil) {
         return;
     }
-    NSRect viewerFrame = viewerWindow.frame;
     NSScreen *screen = viewerWindow.screen ?: NSScreen.mainScreen;
-    NSRect visibleFrame = screen.visibleFrame;
-    NSSize panelSize = panel.frame.size;
-    CGFloat x = NSMaxX(viewerFrame) + 8.0;
-    if (x + panelSize.width > NSMaxX(visibleFrame)) {
-        x = MAX(NSMinX(visibleFrame), NSMaxX(viewerFrame) - panelSize.width - 12.0);
-    }
-    CGFloat y = NSMaxY(viewerFrame) - panelSize.height;
-    y = MIN(MAX(y, NSMinY(visibleFrame)), NSMaxY(visibleFrame) - panelSize.height);
-    [panel setFrameOrigin:NSMakePoint(x, y)];
+    NSRect contentFrame = [viewerWindow convertRectToScreen:viewerWindow.contentLayoutRect];
+    CompactGuidePlacement placement = CompactGuidePlacementRight;
+    NSPoint origin = [CompactGuideLayoutPolicy originForViewerFrame:viewerWindow.frame
+        viewerContentFrame:contentFrame screenVisibleFrame:screen.visibleFrame
+        panelSize:panel.frame.size placement:&placement];
+    (void)placement;
+    [panel setFrameOrigin:origin];
 }
 
 - (void)windowWillClose:(NSNotification *)notification
@@ -405,8 +619,8 @@ static NSString *MedisaleInputStateText(LineOverlayInputState state)
         return;
     }
     self.bound = NO;
-    [self updateFields];
-    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    [self removeModelObserver];
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
     for (id observer in self.observers) {
         [center removeObserver:observer];
     }
@@ -414,21 +628,14 @@ static NSString *MedisaleInputStateText(LineOverlayInputState state)
     self.panel.delegate = nil;
     [self.panel close];
     self.panel = nil;
-    self.pointAField = nil;
-    self.pointBField = nil;
-    self.distanceField = nil;
-    self.stateField = nil;
-    self.bindingField = nil;
-    self.shortInstructionsField = nil;
-    self.detailedGuideToggle = nil;
-    self.detailedInstructionsField = nil;
-    self.saveButton = nil;
-    self.saveStatusField = nil;
     self.model = nil;
+    self.guideState = nil;
     self.guideEngine = nil;
+    self.localization = nil;
     self.persistenceStore = nil;
     self.measurementID = nil;
     self.createdAt = nil;
+    self.cancellation = nil;
     self.viewer = nil;
 
     MedisalePanelHostInvalidation invalidation = self.invalidation;

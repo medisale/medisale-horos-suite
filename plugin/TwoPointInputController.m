@@ -6,6 +6,7 @@
 
 @interface TwoPointInputController ()
 @property(nonatomic, weak, readwrite) ViewerController *viewer;
+@property(nonatomic, copy) MedisaleTwoPointProgress progress;
 @property(nonatomic, copy) MedisaleTwoPointCompletion completion;
 @property(nonatomic, strong) id eventMonitor;
 @property(nonatomic, strong) id windowCloseObserver;
@@ -15,15 +16,23 @@
 @implementation TwoPointInputController
 
 - (instancetype)initWithViewer:(ViewerController *)viewer
+                       progress:(MedisaleTwoPointProgress)progress
                      completion:(MedisaleTwoPointCompletion)completion
 {
     self = [super init];
     if (self) {
         _viewer = viewer;
+        _progress = [progress copy];
         _completion = [completion copy];
         _capturedPoints = [NSMutableArray arrayWithCapacity:2];
     }
     return self;
+}
+
+- (instancetype)initWithViewer:(ViewerController *)viewer
+                     completion:(MedisaleTwoPointCompletion)completion
+{
+    return [self initWithViewer:viewer progress:nil completion:completion];
 }
 
 - (NSArray<NSValue *> *)points
@@ -88,6 +97,10 @@
         return;
     }
     [self.capturedPoints addObject:[NSValue valueWithPoint:point]];
+    MedisaleTwoPointProgress progress = self.progress;
+    if (progress != nil) {
+        progress(self.capturedPoints.count);
+    }
     if (self.capturedPoints.count == 2) {
         [self finishCancelled:NO];
     }
@@ -109,6 +122,7 @@
         self.windowCloseObserver = nil;
     }
     self.completion = nil;
+    self.progress = nil;
     [self.capturedPoints removeAllObjects];
     self.viewer = nil;
 }
@@ -125,6 +139,7 @@
     }
     MedisaleTwoPointCompletion completion = self.completion;
     self.completion = nil;
+    self.progress = nil;
     if (completion != nil) {
         completion(cancelled, self.points);
     }
