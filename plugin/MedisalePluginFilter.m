@@ -7,6 +7,7 @@
 #import "CompactGuideViewState.h"
 #import "GuideEngine.h"
 #import "GuidePreferenceStore.h"
+#import "HoldSpacePanState.h"
 #import "HorosAdapter.h"
 #import "ImageContext.h"
 #import "LineOverlayModel.h"
@@ -16,6 +17,7 @@
 #import "MeasurementRecord.h"
 #import "SQLiteMeasurementStore.h"
 #import "TransientLineOverlayController.h"
+#import "TemporaryPanController.h"
 #import "TwoPointInputController.h"
 #import "ViewerInspectorPanelHost.h"
 
@@ -32,6 +34,7 @@ static NSString *const MedisaleTwoPointToolbarIdentifier = @"jp.medisale.horos.t
     NSMapTable<ViewerController *, TransientLineOverlayController *> *_overlayByViewer;
     NSMapTable<ViewerController *, id<MeasurementPanelHost>> *_panelByViewer;
     NSMapTable<ViewerController *, CompactGuideViewState *> *_guideStateByViewer;
+    NSMapTable<ViewerController *, TemporaryPanController *> *_panByViewer;
     GuideEngine *_guideEngine;
     id<MeasurementPersistenceStore> _measurementStore;
     NSMutableArray *_restoreObservers;
@@ -54,6 +57,10 @@ static NSString *const MedisaleTwoPointToolbarIdentifier = @"jp.medisale.horos.t
     NSArray *inputs = _inputByViewer.objectEnumerator.allObjects;
     NSArray *overlays = _overlayByViewer.objectEnumerator.allObjects;
     NSArray *panels = _panelByViewer.objectEnumerator.allObjects;
+    NSArray *pans = _panByViewer.objectEnumerator.allObjects;
+    for (TemporaryPanController *pan in pans) {
+        [pan invalidate];
+    }
     for (TwoPointInputController *input in inputs) {
         [input invalidate];
     }
@@ -74,6 +81,7 @@ static NSString *const MedisaleTwoPointToolbarIdentifier = @"jp.medisale.horos.t
     _overlayByViewer = nil;
     _panelByViewer = nil;
     _guideStateByViewer = nil;
+    _panByViewer = nil;
     _viewerByToolbarItem = nil;
     _viewerNumberByViewer = nil;
     _browserByToolbarItem = nil;
@@ -137,6 +145,8 @@ static NSString *const MedisaleTwoPointToolbarIdentifier = @"jp.medisale.horos.t
     if (viewer == nil || viewer.window == nil) {
         return;
     }
+    TemporaryPanController *panController =
+        [self temporaryPanControllerForViewer:viewer];
     NSError *contextError = nil;
     ImageContext *context = [HorosAdapter imageContextForViewer:viewer error:&contextError];
     (void)contextError;
@@ -210,7 +220,7 @@ static NSString *const MedisaleTwoPointToolbarIdentifier = @"jp.medisale.horos.t
     __weak ViewerController *weakViewer = viewer;
     __block __weak TransientLineOverlayController *weakOverlay = nil;
     TransientLineOverlayController *overlay = [[TransientLineOverlayController alloc]
-        initWithViewer:viewer model:model invalidation:^{
+        initWithViewer:viewer model:model panState:panController.state invalidation:^{
             typeof(self) self = weakSelf;
             ViewerController *viewer = weakViewer;
             TransientLineOverlayController *overlay = weakOverlay;
@@ -315,6 +325,8 @@ static NSString *const MedisaleTwoPointToolbarIdentifier = @"jp.medisale.horos.t
 
 - (void)startTwoPointInputForViewer:(ViewerController *)controller
 {
+    TemporaryPanController *panController =
+        [self temporaryPanControllerForViewer:controller];
     TransientLineOverlayController *existingOverlay =
         [_overlayByViewer objectForKey:controller];
     id<MeasurementPanelHost> existingPanel = [_panelByViewer objectForKey:controller];
@@ -411,6 +423,7 @@ static NSString *const MedisaleTwoPointToolbarIdentifier = @"jp.medisale.horos.t
 
     TwoPointInputController *input = [[TwoPointInputController alloc]
         initWithViewer:controller
+        panState:panController.state
         progress:^(NSUInteger pointCount) {
             [guideState updateCollectedPointCount:pointCount];
         }
@@ -452,7 +465,7 @@ static NSString *const MedisaleTwoPointToolbarIdentifier = @"jp.medisale.horos.t
                 initWithPointA:a pointB:b imageIdentity:currentIdentity];
             TransientLineOverlayController *overlay =
                 [[TransientLineOverlayController alloc] initWithViewer:viewer
-                    model:model invalidation:^{
+                    model:model panState:panController.state invalidation:^{
                 typeof(self) self = weakSelf;
                 ViewerController *viewer = weakViewer;
                 TransientLineOverlayController *overlay = weakOverlay;
@@ -503,6 +516,7 @@ static NSString *const MedisaleTwoPointToolbarIdentifier = @"jp.medisale.horos.t
     }
 
     [self ensureViewerTracking];
+    [self temporaryPanControllerForViewer:controller];
 
     NSToolbarItem *item = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
     BOOL contextItem = [identifier isEqualToString:MedisaleContextToolbarIdentifier];
@@ -598,6 +612,29 @@ static NSString *const MedisaleTwoPointToolbarIdentifier = @"jp.medisale.horos.t
         [_viewerNumberByViewer setObject:viewerNumber forKey:controller];
     }
     return viewerNumber;
+}
+
+- (TemporaryPanController *)temporaryPanControllerForViewer:(ViewerController *)viewer
+{
+    if (viewer == nil || viewer.window == nil) {
+        return nil;
+    }
+    if (_panByViewer == nil) {
+        _panByViewer = [NSMapTable weakToStrongObjectsMapTable];
+    }
+    TemporaryPanController *existing = [_panByViewer objectForKey:viewer];
+    if (existing.isValid) {
+        return existing;
+    }
+    [existing invalidate];
+    TemporaryPanController *controller =
+        [[TemporaryPanController alloc] initWithViewer:viewer];
+    if (![controller start]) {
+        [controller invalidate];
+        return nil;
+    }
+    [_panByViewer setObject:controller forKey:viewer];
+    return controller;
 }
 
 - (NSArray *)toolbarAllowedIdentifiersForBrowserController:(id)controller

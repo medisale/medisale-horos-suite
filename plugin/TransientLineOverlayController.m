@@ -1,6 +1,7 @@
 #import "TransientLineOverlayController.h"
 
 #import "HorosAdapter.h"
+#import "HoldSpacePanState.h"
 #import "ImageContext.h"
 #import "LineOverlayModel.h"
 #import <DCMView.h>
@@ -117,22 +118,33 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
 @property(nonatomic) MedisaleEndpoint selectedEndpoint;
 @property(nonatomic) BOOL draggingEndpoint;
 @property(nonatomic) NSPoint dragOrigin;
+@property(nonatomic, weak) HoldSpacePanState *panState;
 @end
 
 @implementation TransientLineOverlayController
 
 - (instancetype)initWithViewer:(ViewerController *)viewer
                            model:(LineOverlayModel *)model
+                        panState:(HoldSpacePanState *)panState
                     invalidation:(MedisaleOverlayInvalidation)invalidation
 {
     self = [super init];
     if (self) {
         _viewer = viewer;
         _model = model;
+        _panState = panState;
         _invalidation = [invalidation copy];
         _observers = [NSMutableArray array];
     }
     return self;
+}
+
+- (instancetype)initWithViewer:(ViewerController *)viewer
+                           model:(LineOverlayModel *)model
+                    invalidation:(MedisaleOverlayInvalidation)invalidation
+{
+    return [self initWithViewer:viewer model:model panState:nil
+                   invalidation:invalidation];
 }
 
 - (BOOL)start
@@ -210,6 +222,9 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
                 return event;
             }
             if (event.window != self.viewer.imageView.window) {
+                return event;
+            }
+            if (self.panState.isActive) {
                 return event;
             }
             if (event.type == NSEventTypeKeyDown && event.keyCode == 53) {
@@ -433,6 +448,7 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
 
     MedisaleOverlayInvalidation invalidation = self.invalidation;
     self.invalidation = nil;
+    self.panState = nil;
     self.viewer = nil;
     if (invalidation != nil) {
         invalidation();

@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 
 @class ViewerController;
+@class HoldSpacePanState;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -13,8 +14,12 @@ typedef void (^MedisaleTwoPointProgress)(NSUInteger pointCount);
 @property(nonatomic, copy, readonly) NSArray<NSValue *> *points;
 
 - (instancetype)initWithViewer:(ViewerController *)viewer
+                       panState:(nullable HoldSpacePanState *)panState
                        progress:(nullable MedisaleTwoPointProgress)progress
                      completion:(MedisaleTwoPointCompletion)completion NS_DESIGNATED_INITIALIZER;
+- (instancetype)initWithViewer:(ViewerController *)viewer
+                       progress:(nullable MedisaleTwoPointProgress)progress
+                     completion:(MedisaleTwoPointCompletion)completion;
 - (instancetype)initWithViewer:(ViewerController *)viewer
                      completion:(MedisaleTwoPointCompletion)completion;
 - (instancetype)init NS_UNAVAILABLE;
