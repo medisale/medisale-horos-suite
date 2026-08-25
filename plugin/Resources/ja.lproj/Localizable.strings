@@ -18,11 +18,11 @@
 "guide.progress.cancelled" = "取消済み";
 "guide.progress.unavailable" = "利用不可";
 "guide.calibration.calibrated" = "校正済み";
-"guide.calibration.dicom" = "DICOM spacingのみ";
+"guide.calibration.dicom" = "DICOM/Viewer spacingのみ・未校正";
 "guide.calibration.unknown" = "不明";
 "guide.calibration.compact.label" = "校正";
 "guide.calibration.compact.calibrated" = "校正済み";
-"guide.calibration.compact.dicom" = "DICOM";
+"guide.calibration.compact.dicom" = "DICOM/Viewer・未校正";
 "guide.calibration.compact.unknown" = "不明";
 "guide.confirmation.notReviewed" = "未確認";
 "guide.confirmation.confirmed" = "確認済み";
@@ -40,7 +40,7 @@
 "guide.button.saveSpike" = "テスト記録を保存";
 "guide.details.body" = "撮影肢位、見えるランドマーク、校正状態、臨床的適否はユーザー自身で確認してください。ソフトウェアは画像の臨床的適否を判定しません。確認は現在のメモリ内確認状態だけを記録し、正確性を保証せず、測定を永続化しません。";
 "guide.details.coordinates.format" = "A: %.2f, %.2f\nB: %.2f, %.2f\npixel距離: %.2f px";
-"guide.details.spacing.format" = "pixel間隔 — row: %@ mm、column: %@ mm";
+"guide.details.spacing.format" = "DICOM/Viewer spacing（未校正・正確なtag由来は未確認）— row: %@ mm、column: %@ mm";
 "guide.details.spacing.unavailable" = "物理距離を表示できません。校正由来または2軸のspacingが不明です。";
 "guide.details.collecting" = "画像上で2点を選ぶと座標が表示されます。";
 "guide.save.restored" = "standaloneテストstoreから復元済み";

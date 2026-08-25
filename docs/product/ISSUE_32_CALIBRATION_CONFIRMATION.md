@@ -9,21 +9,31 @@ synthetic fixtures and detected no candidate-specific persistent change.
 
 ## Verified facts
 
-- Calibration has three explicit states: calibrated, DICOM spacing only, and
-  unknown. DICOM-derived spacing never becomes calibrated, and Confirm changes
-  only the review state.
+- Calibration has three explicit states: calibrated, DICOM/Viewer spacing only
+  (uncalibrated), and unknown. Values crossing HorosAdapter are identified as
+  Horos runtime image spacing; their exact DICOM tag-level provenance remains
+  unverified. Runtime spacing never becomes calibrated, and Confirm changes only
+  the review state.
 - The calibrated model requires an explicit safe provenance identifier, method
   version, finite positive row/column spacing, units, derivation status, warnings,
   and schema version. Runtime does not invent an explicit calibration source.
 - Missing, one-axis, zero, negative, non-finite, or provenance-free spacing is
   unknown. Unknown status does not block image-coordinate input.
+- Warning payloads are a bounded allowlist of short codes. Arbitrary prose, paths,
+  identifying text, duplicate codes, and unknown codes fail validation or are
+  discarded before a model can retain them.
 - Finite positive anisotropic spacing remains valid. Row and column values are
   retained separately and applied to their corresponding image axes.
-- Confirmation binds exact Study, Series, SOP, frame, endpoints, calibration
-  provenance, calculation method version, raw result, and versioned display policy.
-- Endpoint/result/calibration changes require renewed confirmation. Identity,
-  incompatible-version, invalid-value, or provenance-loss conditions invalidate
-  a stale confirmation.
+- Confirmation binds exact Study, Series, SOP, non-negative frame, positive image
+  dimensions, in-image finite endpoints, calibration provenance, calculation
+  method version, endpoint-derived raw result, and versioned display policy.
+- Dictionary decoding is fail-closed for exact schema keys, enum values, integer
+  fields, model versions, display precision, calibration combinations, and
+  ImageContext/runtime-spacing consistency. An invalid dictionary cannot create a
+  confirmable snapshot.
+- Real endpoint/result/calibration snapshot changes require renewed confirmation.
+  Identity, incompatible-version, invalid-value, artificial raw-result mutation,
+  or provenance-loss conditions invalidate a stale confirmation.
 - Expand/collapse, panel movement, zoom, PAN, resize, and Hold-Space PAN do not
   alter the confirmation snapshot.
 - The value models retain no Viewer, pixel object, ROI, managed object, DICOM
@@ -38,8 +48,8 @@ synthetic fixtures and detected no candidate-specific persistent change.
   and display-formatting model was added.
 - Compact Guide state/presentation, the Horos adapter boundary, and the panel host
   now consume the independent models.
-- English and Japanese Compact Guide copy covers DICOM-only, unknown, modified,
-  and invalidated states.
+- English and Japanese Compact Guide copy covers DICOM/Viewer-only uncalibrated,
+  unknown, modified, and invalidated states, with an exact locale key-set check.
 - Synthetic model and Compact Guide regression tests cover the new contracts.
 - The candidate bundle version was advanced for the isolated runtime build.
 
@@ -51,9 +61,9 @@ tracked.
 | Test | Result |
 | --- | --- |
 | Transactional persistence regression | PASS — 153 assertions |
-| Compact Guide state/localization/layout regression | PASS — 238 assertions |
+| Compact Guide state/localization/layout regression | PASS — 249 assertions |
 | Hold-Space PAN policy/state regression | PASS — 46 assertions |
-| Calibration/confirmation model suite | PASS — 92 assertions |
+| Calibration/confirmation model suite | PASS — 179 assertions |
 | arm64 candidate build using installed real headers | PASS |
 | Real `PluginFilter` / OsiriXAPI linkage checks | PASS |
 | Candidate-only ad-hoc signature verification | PASS |
@@ -62,8 +72,10 @@ tracked.
 
 ## Evidence
 
-- A valid anisotropic synthetic image displayed DICOM spacing only and separate
-  row/column values. Confirm did not change that calibration classification.
+- A valid anisotropic synthetic image remained in the DICOM/Viewer-spacing-only,
+  uncalibrated class with separate row/column values. Model and localization checks
+  explicitly record that exact DICOM tag-level provenance is unverified. Confirm
+  does not change that calibration classification.
 - A synthetic image with no spacing displayed unknown, explained why physical
   distance was unavailable, and still allowed two-point image-coordinate input.
 - Runtime review transitions were observed from not reviewed to user confirmed,
@@ -96,6 +108,9 @@ tracked.
 - Horos legacy headers emit deprecation warnings during the successful build.
 - Explicit calibration is model/test scaffolding only; no calibration-marker
   detection or calibration workflow is implemented.
+- Horos runtime image spacing is usable for display and calculation when both axes
+  are finite and positive, but this spike does not establish exact tag-level
+  provenance or calibrated status.
 - Confirmation remains in-memory by design. Production persistence and migration
   belong to the later persistence/audit issue.
 - Horos normal Viewer use changes aggregate database-management fingerprints and
@@ -112,6 +127,9 @@ tracked.
   the Compact Guide receives those values instead of Horos runtime objects.
 - Raw double values remain calculation inputs. Locale-aware formatting produces
   display strings only, with a versioned rounding policy and precision.
+- Calibration and confirmation schema versions were advanced together with the
+  stricter pre-merge decoder contract; no backward-compatible production migration
+  is claimed by this spike.
 - The integration extends the existing per-Viewer/SOP/frame ownership and lifecycle
   boundary without changing the retained production schema.
 

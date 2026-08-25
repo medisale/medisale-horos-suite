@@ -95,6 +95,12 @@ verify: sign
 	@! rg -q 'setCurrentTool:|currentTool[[:space:]]*=|setOrigin:|\.origin[[:space:]]*=|tTranslate|NSManagedObject|NSUserDefaults|standardUserDefaults|CFPreferences|addROI|setROI|saveDocument|writeToFile|sqlite3_|DicomDatabase|NSURLSession|NSURLConnection' plugin/HoldSpacePanState.h plugin/HoldSpacePanState.m plugin/TemporaryPanController.h plugin/TemporaryPanController.m
 	@! rg -q 'ViewerController|DCMPix|DicomImage|NSManagedObject|ROI|NSUserDefaults|CFPreferences|sqlite3_' plugin/HoldSpacePanState.h plugin/HoldSpacePanState.m
 	@rg -q 'MedisaleCalibrationStateDICOMSpacingOnly' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
+	@rg -q 'MedisaleCalibrationSourceCategoryHorosRuntimeImageSpacing' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
+	@rg -q 'MedisaleCalibrationDerivationStatusTagLevelUnverified' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
+	@rg -q 'MedisaleWarningCodeIsSafe' plugin/CalibrationConfirmationState.m
+	@rg -q 'MedisalePointIsInsideImage' plugin/CalibrationConfirmationState.m
+	@! rg -q 'dicom-pixel-spacing|MedisaleCalibrationSourceCategoryDICOMDerived|MedisaleCalibrationDerivationStatusDICOMDerived' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
+	@! rg -q 'markMeasurementValueChanged|nextafter' plugin/CompactGuideViewState.h plugin/CompactGuideViewState.m
 	@rg -q 'MedisaleConfirmationStateInvalidated' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m plugin/CompactGuidePresentation.m
 	@rg -q '"guide.confirmation.compact.invalidated"' plugin/Resources/en.lproj/Localizable.strings plugin/Resources/ja.lproj/Localizable.strings
 	@rg -q 'rowSpacing' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m plugin/ViewerInspectorPanelHost.m

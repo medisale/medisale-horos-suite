@@ -1,14 +1,36 @@
 #import "CalibrationConfirmationState.h"
 
 #import "ImageContext.h"
+#import <float.h>
 #import <math.h>
 
-NSInteger const MedisaleCalibrationModelSchemaVersion = 1;
-NSInteger const MedisaleConfirmationModelSchemaVersion = 1;
+NSInteger const MedisaleCalibrationModelSchemaVersion = 2;
+NSInteger const MedisaleConfirmationModelSchemaVersion = 2;
 NSString * const MedisaleDistanceCalculationMethodVersion = @"distance-image-v1";
 NSString * const MedisaleDisplayRoundingPolicyVersion = @"fixed-decimal-v1";
+NSUInteger const MedisaleDisplayPrecision = 2;
 
 static NSString * const MedisaleStateErrorDomain = @"jp.medisale.calibration-confirmation";
+static NSString * const MedisaleRuntimeSpacingSourceIdentifier =
+    @"horos-runtime-image-spacing";
+static NSString * const MedisaleRuntimeSpacingMethodVersion =
+    @"horos-adapter-image-context-v1";
+static NSUInteger const MedisaleMaximumWarningCount = 8;
+static NSUInteger const MedisaleMaximumWarningCodeLength = 48;
+
+static NSString * const MedisaleWarningRowSpacingUnavailable =
+    @"row-spacing-unavailable";
+static NSString * const MedisaleWarningColumnSpacingUnavailable =
+    @"column-spacing-unavailable";
+static NSString * const MedisaleWarningSpacingProvenanceUnknown =
+    @"spacing-provenance-unknown";
+static NSString * const MedisaleWarningAnisotropicSpacing =
+    @"anisotropic-spacing";
+static NSString * const MedisaleWarningUncalibratedRuntimeSpacing =
+    @"uncalibrated-runtime-spacing";
+static NSString * const MedisaleWarningTagProvenanceUnverified =
+    @"tag-provenance-unverified";
+static NSString * const MedisaleWarningProvenanceLost = @"provenance-lost";
 
 static BOOL MedisaleFinitePositive(double value)
 {
@@ -24,6 +46,109 @@ static BOOL MedisaleSafeIdentifier(NSString *value)
         characterSetWithCharactersInString:
         @"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"];
     return [value rangeOfCharacterFromSet:allowed.invertedSet].location == NSNotFound;
+}
+
+static BOOL MedisaleExactIntegerNumber(NSNumber *number)
+{
+    if (![number isKindOfClass:NSNumber.class] ||
+        CFGetTypeID((__bridge CFTypeRef)number) == CFBooleanGetTypeID()) {
+        return NO;
+    }
+    double value = number.doubleValue;
+    return isfinite(value) && floor(value) == value &&
+        value >= (double)NSIntegerMin && value <= (double)NSIntegerMax;
+}
+
+static BOOL MedisaleNonBooleanNumber(id value)
+{
+    return [value isKindOfClass:NSNumber.class] &&
+        CFGetTypeID((__bridge CFTypeRef)value) != CFBooleanGetTypeID();
+}
+
+static NSSet<NSString *> *MedisaleKnownWarningCodes(void)
+{
+    static NSSet<NSString *> *codes;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        codes = [NSSet setWithArray:@[
+            MedisaleWarningRowSpacingUnavailable,
+            MedisaleWarningColumnSpacingUnavailable,
+            MedisaleWarningSpacingProvenanceUnknown,
+            MedisaleWarningAnisotropicSpacing,
+            MedisaleWarningUncalibratedRuntimeSpacing,
+            MedisaleWarningTagProvenanceUnverified,
+            MedisaleWarningProvenanceLost,
+        ]];
+    });
+    return codes;
+}
+
+static BOOL MedisaleWarningCodeIsSafe(NSString *code)
+{
+    if (![code isKindOfClass:NSString.class] || code.length == 0 ||
+        code.length > MedisaleMaximumWarningCodeLength ||
+        ![MedisaleKnownWarningCodes() containsObject:code]) {
+        return NO;
+    }
+    NSCharacterSet *allowed = [NSCharacterSet
+        characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyz0123456789-"];
+    return [code rangeOfCharacterFromSet:allowed.invertedSet].location == NSNotFound;
+}
+
+static BOOL MedisaleWarningCodesAreValid(NSArray *warnings, BOOL allowEmpty)
+{
+    if (![warnings isKindOfClass:NSArray.class] ||
+        warnings.count > MedisaleMaximumWarningCount ||
+        (!allowEmpty && warnings.count == 0)) {
+        return NO;
+    }
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    for (id value in warnings) {
+        if (!MedisaleWarningCodeIsSafe(value) || [seen containsObject:value]) {
+            return NO;
+        }
+        [seen addObject:value];
+    }
+    return YES;
+}
+
+static NSArray<NSString *> *MedisaleSanitizedUnknownWarnings(NSArray *warnings)
+{
+    NSSet<NSString *> *unknownCodes = [NSSet setWithArray:@[
+        MedisaleWarningRowSpacingUnavailable,
+        MedisaleWarningColumnSpacingUnavailable,
+        MedisaleWarningSpacingProvenanceUnknown,
+        MedisaleWarningProvenanceLost,
+    ]];
+    NSMutableArray<NSString *> *result = [NSMutableArray array];
+    for (id value in warnings) {
+        if (result.count == MedisaleMaximumWarningCount) {
+            break;
+        }
+        if (MedisaleWarningCodeIsSafe(value) &&
+            [unknownCodes containsObject:value] &&
+            ![result containsObject:value]) {
+            [result addObject:value];
+        }
+    }
+    if (result.count == 0) {
+        [result addObject:MedisaleWarningSpacingProvenanceUnknown];
+    }
+    return result;
+}
+
+static BOOL MedisaleArraysContainSameObjects(NSArray<NSString *> *left,
+                                              NSArray<NSString *> *right)
+{
+    return left.count == right.count &&
+        [[NSSet setWithArray:left] isEqualToSet:[NSSet setWithArray:right]];
+}
+
+static BOOL MedisalePointIsInsideImage(NSPoint point, NSInteger width,
+                                        NSInteger height)
+{
+    return isfinite(point.x) && isfinite(point.y) && point.x >= 0.0 &&
+        point.y >= 0.0 && point.x < (double)width && point.y < (double)height;
 }
 
 static void MedisaleSetError(NSError **error, NSInteger code, NSString *message)
@@ -93,30 +218,31 @@ static void MedisaleSetError(NSError **error, NSInteger code, NSString *message)
     double column = imageContext.pixelSpacingX;
     NSMutableArray<NSString *> *warnings = [NSMutableArray array];
     if (!MedisaleFinitePositive(row)) {
-        [warnings addObject:@"row-spacing-unavailable"];
+        [warnings addObject:MedisaleWarningRowSpacingUnavailable];
     }
     if (!MedisaleFinitePositive(column)) {
-        [warnings addObject:@"column-spacing-unavailable"];
+        [warnings addObject:MedisaleWarningColumnSpacingUnavailable];
     }
     if (warnings.count > 0) {
         return [self unknownModelWithWarnings:warnings];
     }
+    [warnings addObject:MedisaleWarningUncalibratedRuntimeSpacing];
+    [warnings addObject:MedisaleWarningTagProvenanceUnverified];
     if (row != column) {
-        [warnings addObject:@"anisotropic-spacing"];
+        [warnings addObject:MedisaleWarningAnisotropicSpacing];
     }
     return [[self alloc] initWithState:MedisaleCalibrationStateDICOMSpacingOnly
-        sourceCategory:MedisaleCalibrationSourceCategoryDICOMDerived
-        sourceIdentifier:@"dicom-pixel-spacing"
-        methodVersion:@"image-context-v1"
+        sourceCategory:MedisaleCalibrationSourceCategoryHorosRuntimeImageSpacing
+        sourceIdentifier:MedisaleRuntimeSpacingSourceIdentifier
+        methodVersion:MedisaleRuntimeSpacingMethodVersion
         rowSpacing:row columnSpacing:column units:@"mm"
-        derivationStatus:MedisaleCalibrationDerivationStatusDICOMDerived
+        derivationStatus:MedisaleCalibrationDerivationStatusTagLevelUnverified
         warnings:warnings modelSchemaVersion:MedisaleCalibrationModelSchemaVersion];
 }
 
 + (instancetype)unknownModelWithWarnings:(NSArray<NSString *> *)warnings
 {
-    NSArray<NSString *> *reasons = warnings.count > 0
-        ? warnings : @[@"spacing-provenance-unknown"];
+    NSArray<NSString *> *reasons = MedisaleSanitizedUnknownWarnings(warnings);
     return [[self alloc] initWithState:MedisaleCalibrationStateUnknown
         sourceCategory:MedisaleCalibrationSourceCategoryNone
         sourceIdentifier:@"" methodVersion:@"" rowSpacing:NAN columnSpacing:NAN
@@ -138,7 +264,7 @@ static void MedisaleSetError(NSError **error, NSInteger code, NSString *message)
         return nil;
     }
     NSArray<NSString *> *warnings = rowSpacing == columnSpacing
-        ? @[] : @[@"anisotropic-spacing"];
+        ? @[] : @[MedisaleWarningAnisotropicSpacing];
     return [[self alloc] initWithState:MedisaleCalibrationStateCalibrated
         sourceCategory:MedisaleCalibrationSourceCategoryExplicitCalibration
         sourceIdentifier:sourceIdentifier methodVersion:methodVersion
@@ -149,11 +275,71 @@ static void MedisaleSetError(NSError **error, NSInteger code, NSString *message)
 
 - (BOOL)hasUsableSpacing
 {
-    return self.modelSchemaVersion == MedisaleCalibrationModelSchemaVersion &&
-        self.state != MedisaleCalibrationStateUnknown &&
-        MedisaleFinitePositive(self.rowSpacing) &&
-        MedisaleFinitePositive(self.columnSpacing) &&
-        [self.units isEqualToString:@"mm"];
+    return self.isStructurallyValid &&
+        self.state != MedisaleCalibrationStateUnknown;
+}
+
+- (BOOL)isStructurallyValid
+{
+    if (self.modelSchemaVersion != MedisaleCalibrationModelSchemaVersion ||
+        ![self.units isEqualToString:@"mm"] ||
+        !MedisaleWarningCodesAreValid(self.warnings,
+            self.state != MedisaleCalibrationStateUnknown)) {
+        return NO;
+    }
+    switch (self.state) {
+        case MedisaleCalibrationStateCalibrated: {
+            if (self.sourceCategory !=
+                    MedisaleCalibrationSourceCategoryExplicitCalibration ||
+                self.derivationStatus != MedisaleCalibrationDerivationStatusExplicit ||
+                !MedisaleSafeIdentifier(self.sourceIdentifier) ||
+                !MedisaleSafeIdentifier(self.methodVersion) ||
+                !MedisaleFinitePositive(self.rowSpacing) ||
+                !MedisaleFinitePositive(self.columnSpacing)) {
+                return NO;
+            }
+            NSArray<NSString *> *expected = self.rowSpacing == self.columnSpacing
+                ? @[] : @[MedisaleWarningAnisotropicSpacing];
+            return MedisaleArraysContainSameObjects(self.warnings, expected);
+        }
+        case MedisaleCalibrationStateDICOMSpacingOnly: {
+            if (self.sourceCategory !=
+                    MedisaleCalibrationSourceCategoryHorosRuntimeImageSpacing ||
+                self.derivationStatus !=
+                    MedisaleCalibrationDerivationStatusTagLevelUnverified ||
+                ![self.sourceIdentifier
+                    isEqualToString:MedisaleRuntimeSpacingSourceIdentifier] ||
+                ![self.methodVersion
+                    isEqualToString:MedisaleRuntimeSpacingMethodVersion] ||
+                !MedisaleFinitePositive(self.rowSpacing) ||
+                !MedisaleFinitePositive(self.columnSpacing)) {
+                return NO;
+            }
+            NSMutableArray<NSString *> *expected = [NSMutableArray arrayWithArray:@[
+                MedisaleWarningUncalibratedRuntimeSpacing,
+                MedisaleWarningTagProvenanceUnverified,
+            ]];
+            if (self.rowSpacing != self.columnSpacing) {
+                [expected addObject:MedisaleWarningAnisotropicSpacing];
+            }
+            return MedisaleArraysContainSameObjects(self.warnings, expected);
+        }
+        case MedisaleCalibrationStateUnknown: {
+            NSSet<NSString *> *allowed = [NSSet setWithArray:@[
+                MedisaleWarningRowSpacingUnavailable,
+                MedisaleWarningColumnSpacingUnavailable,
+                MedisaleWarningSpacingProvenanceUnknown,
+                MedisaleWarningProvenanceLost,
+            ]];
+            return self.sourceCategory == MedisaleCalibrationSourceCategoryNone &&
+                self.derivationStatus == MedisaleCalibrationDerivationStatusMissing &&
+                self.sourceIdentifier.length == 0 && self.methodVersion.length == 0 &&
+                isnan(self.rowSpacing) && isnan(self.columnSpacing) &&
+                [[NSSet setWithArray:self.warnings] isSubsetOfSet:allowed];
+        }
+        default:
+            return NO;
+    }
 }
 
 - (double)physicalDistanceForPointA:(NSPoint)pointA pointB:(NSPoint)pointB
@@ -185,6 +371,16 @@ static void MedisaleSetError(NSError **error, NSInteger code, NSString *message)
 + (instancetype)modelFromDictionary:(NSDictionary<NSString *,id> *)dictionary
                                 error:(NSError **)error
 {
+    NSSet<NSString *> *requiredKeys = [NSSet setWithArray:@[
+        @"state", @"sourceCategory", @"sourceIdentifier", @"methodVersion",
+        @"rowSpacing", @"columnSpacing", @"units", @"derivationStatus",
+        @"warnings", @"modelSchemaVersion",
+    ]];
+    if (![dictionary isKindOfClass:NSDictionary.class] ||
+        ![[NSSet setWithArray:dictionary.allKeys] isEqualToSet:requiredKeys]) {
+        MedisaleSetError(error, 2, @"Calibration model schema or values are incompatible.");
+        return nil;
+    }
     NSNumber *schema = dictionary[@"modelSchemaVersion"];
     NSNumber *state = dictionary[@"state"];
     NSNumber *source = dictionary[@"sourceCategory"];
@@ -195,13 +391,13 @@ static void MedisaleSetError(NSError **error, NSInteger code, NSString *message)
     NSString *methodVersion = dictionary[@"methodVersion"];
     NSString *units = dictionary[@"units"];
     NSArray *warnings = dictionary[@"warnings"];
-    if (![schema isKindOfClass:NSNumber.class] ||
+    if (!MedisaleExactIntegerNumber(schema) ||
         schema.integerValue != MedisaleCalibrationModelSchemaVersion ||
-        ![state isKindOfClass:NSNumber.class] ||
-        ![source isKindOfClass:NSNumber.class] ||
-        ![derivation isKindOfClass:NSNumber.class] ||
-        ![row isKindOfClass:NSNumber.class] ||
-        ![column isKindOfClass:NSNumber.class] ||
+        !MedisaleExactIntegerNumber(state) ||
+        !MedisaleExactIntegerNumber(source) ||
+        !MedisaleExactIntegerNumber(derivation) ||
+        !MedisaleNonBooleanNumber(row) ||
+        !MedisaleNonBooleanNumber(column) ||
         ![sourceIdentifier isKindOfClass:NSString.class] ||
         ![methodVersion isKindOfClass:NSString.class] ||
         ![units isKindOfClass:NSString.class] ||
@@ -209,55 +405,18 @@ static void MedisaleSetError(NSError **error, NSInteger code, NSString *message)
         MedisaleSetError(error, 2, @"Calibration model schema or values are incompatible.");
         return nil;
     }
-    MedisaleCalibrationState calibrationState = state.integerValue;
-    BOOL warningsValid = YES;
-    for (id warning in warnings) {
-        if (![warning isKindOfClass:NSString.class]) {
-            warningsValid = NO;
-            break;
-        }
-    }
-    BOOL commonKnownValuesValid = MedisaleSafeIdentifier(sourceIdentifier) &&
-        MedisaleSafeIdentifier(methodVersion) &&
-        MedisaleFinitePositive(row.doubleValue) &&
-        MedisaleFinitePositive(column.doubleValue) &&
-        [units isEqualToString:@"mm"];
-    BOOL stateCombinationValid = NO;
-    switch (calibrationState) {
-        case MedisaleCalibrationStateCalibrated:
-            stateCombinationValid = commonKnownValuesValid &&
-                source.integerValue ==
-                    MedisaleCalibrationSourceCategoryExplicitCalibration &&
-                derivation.integerValue ==
-                    MedisaleCalibrationDerivationStatusExplicit;
-            break;
-        case MedisaleCalibrationStateDICOMSpacingOnly:
-            stateCombinationValid = commonKnownValuesValid &&
-                source.integerValue == MedisaleCalibrationSourceCategoryDICOMDerived &&
-                derivation.integerValue ==
-                    MedisaleCalibrationDerivationStatusDICOMDerived;
-            break;
-        case MedisaleCalibrationStateUnknown:
-            stateCombinationValid =
-                source.integerValue == MedisaleCalibrationSourceCategoryNone &&
-                sourceIdentifier.length == 0 && methodVersion.length == 0 &&
-                derivation.integerValue == MedisaleCalibrationDerivationStatusMissing &&
-                [units isEqualToString:@"mm"];
-            break;
-        default:
-            stateCombinationValid = NO;
-            break;
-    }
-    if (!warningsValid || !stateCombinationValid) {
-        MedisaleSetError(error, 3, @"Calibration provenance is invalid.");
-        return nil;
-    }
-    return [[self alloc] initWithState:calibrationState
+    CalibrationProvenanceModel *model = [[self alloc]
+        initWithState:state.integerValue
         sourceCategory:source.integerValue sourceIdentifier:sourceIdentifier
         methodVersion:methodVersion rowSpacing:row.doubleValue
         columnSpacing:column.doubleValue units:units
         derivationStatus:derivation.integerValue warnings:warnings
         modelSchemaVersion:schema.integerValue];
+    if (!model.isStructurallyValid) {
+        MedisaleSetError(error, 3, @"Calibration provenance is invalid.");
+        return nil;
+    }
+    return model;
 }
 
 - (BOOL)isEquivalentToModel:(CalibrationProvenanceModel *)other
@@ -316,26 +475,69 @@ static void MedisaleSetError(NSError **error, NSInteger code, NSString *message)
 
 - (BOOL)isStructurallyValid
 {
-    return self.imageIdentity.studyInstanceUID.length > 0 &&
-        self.imageIdentity.seriesInstanceUID.length > 0 &&
-        self.imageIdentity.sopInstanceUID.length > 0 &&
-        isfinite(self.pointA.x) && isfinite(self.pointA.y) &&
-        isfinite(self.pointB.x) && isfinite(self.pointB.y) &&
-        isfinite(self.rawResult) &&
-        MedisaleSafeIdentifier(self.calculationMethodVersion) &&
-        MedisaleSafeIdentifier(self.displayRoundingPolicyVersion) &&
-        self.displayPrecision <= 9 &&
-        self.modelSchemaVersion == MedisaleConfirmationModelSchemaVersion &&
-        self.calibration.modelSchemaVersion == MedisaleCalibrationModelSchemaVersion;
+    ImageContext *identity = self.imageIdentity;
+    if (!MedisaleSafeIdentifier(identity.studyInstanceUID) ||
+        !MedisaleSafeIdentifier(identity.seriesInstanceUID) ||
+        !MedisaleSafeIdentifier(identity.sopInstanceUID) ||
+        identity.frameNumber < 0 || identity.pixelWidth <= 0 ||
+        identity.pixelHeight <= 0 ||
+        !MedisalePointIsInsideImage(self.pointA, identity.pixelWidth,
+                                    identity.pixelHeight) ||
+        !MedisalePointIsInsideImage(self.pointB, identity.pixelWidth,
+                                    identity.pixelHeight) ||
+        !isfinite(self.rawResult) ||
+        ![self.calculationMethodVersion
+            isEqualToString:MedisaleDistanceCalculationMethodVersion] ||
+        ![self.displayRoundingPolicyVersion
+            isEqualToString:MedisaleDisplayRoundingPolicyVersion] ||
+        self.displayPrecision != MedisaleDisplayPrecision ||
+        self.modelSchemaVersion != MedisaleConfirmationModelSchemaVersion ||
+        !self.calibration.isStructurallyValid) {
+        return NO;
+    }
+
+    double expectedResult = hypot(self.pointB.x - self.pointA.x,
+                                  self.pointB.y - self.pointA.y);
+    double tolerance = DBL_EPSILON * fmax(1.0, expectedResult) * 8.0;
+    if (fabs(self.rawResult - expectedResult) > tolerance) {
+        return NO;
+    }
+
+    BOOL contextSpacingAvailable =
+        MedisaleFinitePositive(identity.pixelSpacingX) &&
+        MedisaleFinitePositive(identity.pixelSpacingY);
+    switch (self.calibration.state) {
+        case MedisaleCalibrationStateDICOMSpacingOnly:
+            return contextSpacingAvailable &&
+                self.calibration.columnSpacing == identity.pixelSpacingX &&
+                self.calibration.rowSpacing == identity.pixelSpacingY;
+        case MedisaleCalibrationStateUnknown:
+            return !contextSpacingAvailable;
+        case MedisaleCalibrationStateCalibrated:
+            return YES;
+        default:
+            return NO;
+    }
 }
 
 - (BOOL)matchesImageIdentity:(ImageContext *)imageIdentity
 {
+    BOOL spacingXEqual = imageIdentity != nil &&
+        ((isnan(self.imageIdentity.pixelSpacingX) &&
+          isnan(imageIdentity.pixelSpacingX)) ||
+         self.imageIdentity.pixelSpacingX == imageIdentity.pixelSpacingX);
+    BOOL spacingYEqual = imageIdentity != nil &&
+        ((isnan(self.imageIdentity.pixelSpacingY) &&
+          isnan(imageIdentity.pixelSpacingY)) ||
+         self.imageIdentity.pixelSpacingY == imageIdentity.pixelSpacingY);
     return imageIdentity != nil &&
         [self.imageIdentity.studyInstanceUID isEqualToString:imageIdentity.studyInstanceUID] &&
         [self.imageIdentity.seriesInstanceUID isEqualToString:imageIdentity.seriesInstanceUID] &&
         [self.imageIdentity.sopInstanceUID isEqualToString:imageIdentity.sopInstanceUID] &&
-        self.imageIdentity.frameNumber == imageIdentity.frameNumber;
+        self.imageIdentity.frameNumber == imageIdentity.frameNumber &&
+        self.imageIdentity.pixelWidth == imageIdentity.pixelWidth &&
+        self.imageIdentity.pixelHeight == imageIdentity.pixelHeight &&
+        spacingXEqual && spacingYEqual;
 }
 
 - (BOOL)isEquivalentToSnapshot:(MeasurementReviewSnapshot *)other
@@ -377,6 +579,18 @@ static void MedisaleSetError(NSError **error, NSInteger code, NSString *message)
 + (instancetype)snapshotFromDictionary:(NSDictionary<NSString *,id> *)dictionary
                                    error:(NSError **)error
 {
+    NSSet<NSString *> *requiredKeys = [NSSet setWithArray:@[
+        @"study", @"series", @"sop", @"frame", @"width", @"height",
+        @"spacingX", @"spacingY", @"pointAX", @"pointAY", @"pointBX",
+        @"pointBY", @"calibration", @"calculationMethodVersion",
+        @"rawResult", @"displayRoundingPolicyVersion", @"displayPrecision",
+        @"modelSchemaVersion",
+    ]];
+    if (![dictionary isKindOfClass:NSDictionary.class] ||
+        ![[NSSet setWithArray:dictionary.allKeys] isEqualToSet:requiredKeys]) {
+        MedisaleSetError(error, 4, @"Confirmation snapshot schema is incompatible.");
+        return nil;
+    }
     NSArray<NSString *> *stringKeys = @[@"study", @"series", @"sop",
         @"calculationMethodVersion", @"displayRoundingPolicyVersion"];
     for (NSString *key in stringKeys) {
@@ -385,11 +599,18 @@ static void MedisaleSetError(NSError **error, NSInteger code, NSString *message)
             return nil;
         }
     }
-    NSArray<NSString *> *numberKeys = @[@"frame", @"width", @"height",
-        @"spacingX", @"spacingY", @"pointAX", @"pointAY", @"pointBX",
-        @"pointBY", @"rawResult", @"displayPrecision", @"modelSchemaVersion"];
+    NSArray<NSString *> *integerKeys = @[@"frame", @"width", @"height",
+        @"displayPrecision", @"modelSchemaVersion"];
+    for (NSString *key in integerKeys) {
+        if (!MedisaleExactIntegerNumber(dictionary[key])) {
+            MedisaleSetError(error, 5, @"Confirmation snapshot integer value is invalid.");
+            return nil;
+        }
+    }
+    NSArray<NSString *> *numberKeys = @[@"spacingX", @"spacingY", @"pointAX",
+        @"pointAY", @"pointBX", @"pointBY", @"rawResult"];
     for (NSString *key in numberKeys) {
-        if (![dictionary[key] isKindOfClass:NSNumber.class]) {
+        if (!MedisaleNonBooleanNumber(dictionary[key])) {
             MedisaleSetError(error, 5, @"Confirmation snapshot numeric value is missing.");
             return nil;
         }
@@ -422,7 +643,7 @@ static void MedisaleSetError(NSError **error, NSInteger code, NSString *message)
         calculationMethodVersion:dictionary[@"calculationMethodVersion"]
         rawResult:[dictionary[@"rawResult"] doubleValue]
         displayRoundingPolicyVersion:dictionary[@"displayRoundingPolicyVersion"]
-        displayPrecision:[dictionary[@"displayPrecision"] unsignedIntegerValue]
+        displayPrecision:(NSUInteger)[dictionary[@"displayPrecision"] integerValue]
         modelSchemaVersion:[dictionary[@"modelSchemaVersion"] integerValue]];
     if (!snapshot.isStructurallyValid) {
         MedisaleSetError(error, 7, @"Confirmation snapshot is incompatible or invalid.");

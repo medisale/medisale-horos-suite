@@ -30,6 +30,8 @@
         return nil;
     }
 
+    // These values are Horos runtime image spacing. This adapter does not assert
+    // which DICOM attribute, if any, supplied the runtime values.
     return [[ImageContext alloc] initWithStudyInstanceUID:studyUID
                                         seriesInstanceUID:seriesUID
                                            sopInstanceUID:sopUID

@@ -69,7 +69,6 @@ FOUNDATION_EXPORT NSNotificationName const CompactGuideViewStateDidChangeNotific
                                       pointB:(NSPoint)pointB
                                    rawResult:(double)rawResult
                     calculationMethodVersion:(NSString *)calculationMethodVersion;
-- (void)markMeasurementValueChanged;
 - (BOOL)matchesImageContext:(nullable ImageContext *)imageContext;
 
 @end

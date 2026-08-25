@@ -6,19 +6,20 @@ NS_ASSUME_NONNULL_BEGIN
 
 typedef NS_ENUM(NSInteger, MedisaleCalibrationState) {
     MedisaleCalibrationStateCalibrated = 0,
+    // Horos runtime image spacing, uncalibrated; exact DICOM tag provenance unknown.
     MedisaleCalibrationStateDICOMSpacingOnly,
     MedisaleCalibrationStateUnknown,
 };
 
 typedef NS_ENUM(NSInteger, MedisaleCalibrationSourceCategory) {
     MedisaleCalibrationSourceCategoryNone = 0,
-    MedisaleCalibrationSourceCategoryDICOMDerived,
+    MedisaleCalibrationSourceCategoryHorosRuntimeImageSpacing,
     MedisaleCalibrationSourceCategoryExplicitCalibration,
 };
 
 typedef NS_ENUM(NSInteger, MedisaleCalibrationDerivationStatus) {
     MedisaleCalibrationDerivationStatusMissing = 0,
-    MedisaleCalibrationDerivationStatusDICOMDerived,
+    MedisaleCalibrationDerivationStatusTagLevelUnverified,
     MedisaleCalibrationDerivationStatusExplicit,
     MedisaleCalibrationDerivationStatusInvalid,
 };
@@ -34,6 +35,7 @@ FOUNDATION_EXPORT NSInteger const MedisaleCalibrationModelSchemaVersion;
 FOUNDATION_EXPORT NSInteger const MedisaleConfirmationModelSchemaVersion;
 FOUNDATION_EXPORT NSString * const MedisaleDistanceCalculationMethodVersion;
 FOUNDATION_EXPORT NSString * const MedisaleDisplayRoundingPolicyVersion;
+FOUNDATION_EXPORT NSUInteger const MedisaleDisplayPrecision;
 
 @interface CalibrationProvenanceModel : NSObject <NSCopying>
 
@@ -48,6 +50,7 @@ FOUNDATION_EXPORT NSString * const MedisaleDisplayRoundingPolicyVersion;
 @property(nonatomic, copy, readonly) NSArray<NSString *> *warnings;
 @property(nonatomic, readonly) NSInteger modelSchemaVersion;
 @property(nonatomic, readonly, getter=hasUsableSpacing) BOOL usableSpacing;
+@property(nonatomic, readonly, getter=isStructurallyValid) BOOL structurallyValid;
 
 + (instancetype)modelFromImageContext:(ImageContext *)imageContext;
 + (instancetype)unknownModelWithWarnings:(NSArray<NSString *> *)warnings;
