@@ -70,6 +70,8 @@
             return @"guide.confirmation.confirmed";
         case CompactGuideConfirmationStateModifiedAfterConfirmation:
             return @"guide.confirmation.modified";
+        case CompactGuideConfirmationStateInvalidated:
+            return @"guide.confirmation.invalidated";
         case CompactGuideConfirmationStateNotReviewed:
         default:
             return @"guide.confirmation.notReviewed";

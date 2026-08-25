@@ -1,37 +1,46 @@
 #import "CompactGuideViewState.h"
 
 #import "ImageContext.h"
+#import <math.h>
 
 NSNotificationName const CompactGuideViewStateDidChangeNotification =
     @"MedisaleCompactGuideViewStateDidChangeNotification";
 
 @interface CompactGuideViewState ()
 @property(nonatomic, readwrite) CompactGuideMeasurementState measurementState;
-@property(nonatomic, readwrite) CompactGuideCalibrationState calibrationState;
-@property(nonatomic, readwrite) CompactGuideConfirmationState confirmationState;
+@property(nonatomic, copy, readwrite) CalibrationProvenanceModel *calibrationModel;
+@property(nonatomic, strong, readwrite) ConfirmationStateModel *confirmationModel;
 @property(nonatomic, readwrite) NSUInteger collectedPointCount;
 @property(nonatomic, readwrite, getter=isExpanded) BOOL expanded;
 @property(nonatomic) CompactGuideMeasurementState stateBeforeEditing;
-@property(nonatomic) CompactGuideConfirmationState confirmationBeforeEditing;
 @property(nonatomic) CompactGuideMeasurementState stateBeforeCollecting;
 @end
 
 @implementation CompactGuideViewState
 
 - (instancetype)initWithImageIdentity:(ImageContext *)imageIdentity
-                     calibrationState:(CompactGuideCalibrationState)calibrationState
+                      calibrationModel:(CalibrationProvenanceModel *)calibrationModel
 {
     self = [super init];
     if (self) {
         _imageIdentity = [imageIdentity copy];
         _measurementState = CompactGuideMeasurementStateIdle;
-        _calibrationState = calibrationState;
-        _confirmationState = CompactGuideConfirmationStateNotReviewed;
+        _calibrationModel = [calibrationModel copy];
+        _confirmationModel = [[ConfirmationStateModel alloc] init];
         _stateBeforeEditing = CompactGuideMeasurementStateIdle;
-        _confirmationBeforeEditing = CompactGuideConfirmationStateNotReviewed;
         _stateBeforeCollecting = CompactGuideMeasurementStateIdle;
     }
     return self;
+}
+
+- (CompactGuideCalibrationState)calibrationState
+{
+    return self.calibrationModel.state;
+}
+
+- (CompactGuideConfirmationState)confirmationState
+{
+    return self.confirmationModel.state;
 }
 
 - (BOOL)canCancel
@@ -43,8 +52,11 @@ NSNotificationName const CompactGuideViewStateDidChangeNotification =
 
 - (BOOL)canConfirm
 {
-    return self.measurementState == CompactGuideMeasurementStateCalculatedUnconfirmed ||
+    BOOL stateAllows =
+        self.measurementState == CompactGuideMeasurementStateCalculatedUnconfirmed ||
         self.measurementState == CompactGuideMeasurementStateModifiedAfterConfirmation;
+    return stateAllows && self.confirmationModel.currentSnapshot.isStructurallyValid &&
+        self.confirmationState != CompactGuideConfirmationStateInvalidated;
 }
 
 - (BOOL)startCollecting
@@ -57,7 +69,7 @@ NSNotificationName const CompactGuideViewStateDidChangeNotification =
         CompactGuideMeasurementStateCancelled
             ? CompactGuideMeasurementStateIdle : self.measurementState;
     self.measurementState = CompactGuideMeasurementStateCollecting;
-    self.confirmationState = CompactGuideConfirmationStateNotReviewed;
+    [self.confirmationModel reset];
     self.collectedPointCount = 0;
     [self notifyChange];
     return YES;
@@ -88,7 +100,6 @@ NSNotificationName const CompactGuideViewStateDidChangeNotification =
     }
     self.collectedPointCount = 2;
     self.measurementState = CompactGuideMeasurementStateCalculatedUnconfirmed;
-    self.confirmationState = CompactGuideConfirmationStateNotReviewed;
     [self notifyChange];
     return YES;
 }
@@ -101,7 +112,6 @@ NSNotificationName const CompactGuideViewStateDidChangeNotification =
         return NO;
     }
     self.stateBeforeEditing = self.measurementState;
-    self.confirmationBeforeEditing = self.confirmationState;
     self.measurementState = CompactGuideMeasurementStateEditing;
     [self notifyChange];
     return YES;
@@ -114,16 +124,13 @@ NSNotificationName const CompactGuideViewStateDidChangeNotification =
     }
     if (!changed) {
         self.measurementState = self.stateBeforeEditing;
-        self.confirmationState = self.confirmationBeforeEditing;
     } else if (self.stateBeforeEditing == CompactGuideMeasurementStateConfirmed ||
                self.stateBeforeEditing == CompactGuideMeasurementStateModifiedAfterConfirmation ||
-               self.confirmationBeforeEditing == CompactGuideConfirmationStateUserConfirmed ||
-               self.confirmationBeforeEditing == CompactGuideConfirmationStateModifiedAfterConfirmation) {
+               self.confirmationState == CompactGuideConfirmationStateUserConfirmed ||
+               self.confirmationState == CompactGuideConfirmationStateModifiedAfterConfirmation) {
         self.measurementState = CompactGuideMeasurementStateModifiedAfterConfirmation;
-        self.confirmationState = CompactGuideConfirmationStateModifiedAfterConfirmation;
     } else {
         self.measurementState = CompactGuideMeasurementStateCalculatedUnconfirmed;
-        self.confirmationState = CompactGuideConfirmationStateNotReviewed;
     }
     [self notifyChange];
     return YES;
@@ -131,11 +138,10 @@ NSNotificationName const CompactGuideViewStateDidChangeNotification =
 
 - (BOOL)confirm
 {
-    if (!self.canConfirm) {
+    if (!self.canConfirm || ![self.confirmationModel confirmCurrentSnapshot]) {
         return NO;
     }
     self.measurementState = CompactGuideMeasurementStateConfirmed;
-    self.confirmationState = CompactGuideConfirmationStateUserConfirmed;
     [self notifyChange];
     return YES;
 }
@@ -144,13 +150,12 @@ NSNotificationName const CompactGuideViewStateDidChangeNotification =
 {
     if (self.measurementState == CompactGuideMeasurementStateEditing) {
         self.measurementState = self.stateBeforeEditing;
-        self.confirmationState = self.confirmationBeforeEditing;
         [self notifyChange];
         return YES;
     }
     if (self.measurementState == CompactGuideMeasurementStateCalculatedUnconfirmed) {
         self.measurementState = self.stateBeforeCollecting;
-        self.confirmationState = CompactGuideConfirmationStateNotReviewed;
+        [self.confirmationModel reset];
         self.collectedPointCount = 0;
         [self notifyChange];
         return YES;
@@ -159,7 +164,7 @@ NSNotificationName const CompactGuideViewStateDidChangeNotification =
         return NO;
     }
     self.measurementState = CompactGuideMeasurementStateCancelled;
-    self.confirmationState = CompactGuideConfirmationStateNotReviewed;
+    [self.confirmationModel reset];
     self.collectedPointCount = 0;
     [self notifyChange];
     return YES;
@@ -178,7 +183,7 @@ NSNotificationName const CompactGuideViewStateDidChangeNotification =
 - (BOOL)markUnavailable
 {
     self.measurementState = CompactGuideMeasurementStateUnavailable;
-    self.confirmationState = CompactGuideConfirmationStateNotReviewed;
+    [self.confirmationModel invalidate];
     self.collectedPointCount = 0;
     [self notifyChange];
     return YES;
@@ -187,7 +192,7 @@ NSNotificationName const CompactGuideViewStateDidChangeNotification =
 - (BOOL)resetToIdle
 {
     self.measurementState = CompactGuideMeasurementStateIdle;
-    self.confirmationState = CompactGuideConfirmationStateNotReviewed;
+    [self.confirmationModel reset];
     self.collectedPointCount = 0;
     [self notifyChange];
     return YES;
@@ -202,21 +207,55 @@ NSNotificationName const CompactGuideViewStateDidChangeNotification =
     [self notifyChange];
 }
 
-- (void)updateCalibrationState:(CompactGuideCalibrationState)calibrationState
+- (void)updateCalibrationModel:(CalibrationProvenanceModel *)calibrationModel
 {
-    if (self.calibrationState == calibrationState) {
+    if ([self.calibrationModel isEquivalentToModel:calibrationModel]) {
         return;
     }
-    self.calibrationState = calibrationState;
-    [self markMeasurementValueChanged];
+    self.calibrationModel = [calibrationModel copy];
+    MeasurementReviewSnapshot *current = self.confirmationModel.currentSnapshot;
+    if (current != nil) {
+        [self updateMeasurementSnapshotWithPointA:current.pointA
+            pointB:current.pointB rawResult:current.rawResult
+            calculationMethodVersion:current.calculationMethodVersion];
+    } else {
+        [self notifyChange];
+    }
+}
+
+- (void)updateMeasurementSnapshotWithPointA:(NSPoint)pointA
+                                      pointB:(NSPoint)pointB
+                                   rawResult:(double)rawResult
+                    calculationMethodVersion:(NSString *)calculationMethodVersion
+{
+    MeasurementReviewSnapshot *snapshot = [[MeasurementReviewSnapshot alloc]
+        initWithImageIdentity:self.imageIdentity pointA:pointA pointB:pointB
+        calibration:self.calibrationModel
+        calculationMethodVersion:calculationMethodVersion rawResult:rawResult
+        displayRoundingPolicyVersion:MedisaleDisplayRoundingPolicyVersion
+        displayPrecision:2
+        modelSchemaVersion:MedisaleConfirmationModelSchemaVersion];
+    [self.confirmationModel updateCurrentSnapshot:snapshot];
+    if (self.measurementState == CompactGuideMeasurementStateConfirmed &&
+        self.confirmationState == CompactGuideConfirmationStateModifiedAfterConfirmation) {
+        self.measurementState = CompactGuideMeasurementStateModifiedAfterConfirmation;
+    } else if ((self.measurementState == CompactGuideMeasurementStateConfirmed ||
+                self.measurementState ==
+                    CompactGuideMeasurementStateModifiedAfterConfirmation) &&
+               self.confirmationState == CompactGuideConfirmationStateInvalidated) {
+        self.measurementState = CompactGuideMeasurementStateCalculatedUnconfirmed;
+    }
+    [self notifyChange];
 }
 
 - (void)markMeasurementValueChanged
 {
-    if (self.measurementState == CompactGuideMeasurementStateConfirmed ||
-        self.confirmationState == CompactGuideConfirmationStateUserConfirmed) {
-        self.measurementState = CompactGuideMeasurementStateModifiedAfterConfirmation;
-        self.confirmationState = CompactGuideConfirmationStateModifiedAfterConfirmation;
+    MeasurementReviewSnapshot *current = self.confirmationModel.currentSnapshot;
+    if (current != nil) {
+        [self updateMeasurementSnapshotWithPointA:current.pointA
+            pointB:current.pointB rawResult:nextafter(current.rawResult, INFINITY)
+            calculationMethodVersion:current.calculationMethodVersion];
+        return;
     }
     [self notifyChange];
 }

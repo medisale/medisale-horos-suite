@@ -20,8 +20,7 @@
 
     if (image == nil || pix == nil || studyUID.length == 0 ||
         seriesUID.length == 0 || sopUID.length == 0 ||
-        pix.pwidth <= 0 || pix.pheight <= 0 ||
-        pix.pixelSpacingX <= 0 || pix.pixelSpacingY <= 0) {
+        pix.pwidth <= 0 || pix.pheight <= 0) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:@"jp.medisale.horos-adapter"
                                          code:1
