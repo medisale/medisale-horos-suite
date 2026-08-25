@@ -1,5 +1,6 @@
 #import "TwoPointInputController.h"
 
+#import "HoldSpacePanState.h"
 #import <DCMPix.h>
 #import <DCMView.h>
 #import <ViewerController.h>
@@ -11,22 +12,33 @@
 @property(nonatomic, strong) id eventMonitor;
 @property(nonatomic, strong) id windowCloseObserver;
 @property(nonatomic, strong) NSMutableArray<NSValue *> *capturedPoints;
+@property(nonatomic, weak) HoldSpacePanState *panState;
 @end
 
 @implementation TwoPointInputController
 
 - (instancetype)initWithViewer:(ViewerController *)viewer
+                       panState:(HoldSpacePanState *)panState
                        progress:(MedisaleTwoPointProgress)progress
                      completion:(MedisaleTwoPointCompletion)completion
 {
     self = [super init];
     if (self) {
         _viewer = viewer;
+        _panState = panState;
         _progress = [progress copy];
         _completion = [completion copy];
         _capturedPoints = [NSMutableArray arrayWithCapacity:2];
     }
     return self;
+}
+
+- (instancetype)initWithViewer:(ViewerController *)viewer
+                       progress:(MedisaleTwoPointProgress)progress
+                     completion:(MedisaleTwoPointCompletion)completion
+{
+    return [self initWithViewer:viewer panState:nil progress:progress
+                     completion:completion];
 }
 
 - (instancetype)initWithViewer:(ViewerController *)viewer
@@ -66,6 +78,9 @@
                 return event;
             }
             DCMView *view = self.viewer.imageView;
+            if (self.panState.isActive) {
+                return event;
+            }
             if (event.type == NSEventTypeKeyDown) {
                 if (event.keyCode == 53 && event.window == view.window) {
                     [self cancel];
@@ -123,6 +138,7 @@
     }
     self.completion = nil;
     self.progress = nil;
+    self.panState = nil;
     [self.capturedPoints removeAllObjects];
     self.viewer = nil;
 }

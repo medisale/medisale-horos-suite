@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 
 @class LineOverlayModel;
+@class HoldSpacePanState;
 @class ViewerController;
 
 NS_ASSUME_NONNULL_BEGIN
@@ -15,7 +16,11 @@ typedef void (^MedisaleOverlayInvalidation)(void);
 
 - (instancetype)initWithViewer:(ViewerController *)viewer
                            model:(LineOverlayModel *)model
+                        panState:(nullable HoldSpacePanState *)panState
                     invalidation:(MedisaleOverlayInvalidation)invalidation NS_DESIGNATED_INITIALIZER;
+- (instancetype)initWithViewer:(ViewerController *)viewer
+                           model:(LineOverlayModel *)model
+                    invalidation:(MedisaleOverlayInvalidation)invalidation;
 - (instancetype)init NS_UNAVAILABLE;
 - (BOOL)start;
 - (void)cancelCurrentInteraction;
