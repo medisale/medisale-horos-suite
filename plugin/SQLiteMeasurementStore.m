@@ -1,6 +1,7 @@
 #import "SQLiteMeasurementStore.h"
 
 #import "ImageContext.h"
+#import "LegacyDistanceMeasurementAdapter.h"
 #import "MeasurementRecord.h"
 #import <errno.h>
 #import <fcntl.h>
@@ -219,9 +220,6 @@ static BOOL MedisaleRecordIsValid(MeasurementRecord *record)
         record.endpointBX >= 0.0 && record.endpointBY >= 0.0 &&
         record.endpointAX < context.pixelWidth && record.endpointBX < context.pixelWidth &&
         record.endpointAY < context.pixelHeight && record.endpointBY < context.pixelHeight &&
-        fabs(record.pixelDistance - hypot(record.endpointBX - record.endpointAX,
-                                          record.endpointBY - record.endpointAY)) <= 0.000001 *
-            MAX(1.0, record.pixelDistance) &&
         record.schemaVersion == MedisaleMeasurementSchemaVersion &&
         record.createdAt != nil && record.updatedAt != nil &&
         [record.updatedAt compare:record.createdAt] != NSOrderedAscending;
@@ -385,6 +383,12 @@ static BOOL MedisaleRecordIsValid(MeasurementRecord *record)
         }
         return NO;
     }
+    MeasurementRecord *canonical = [LegacyDistanceMeasurementAdapter
+        canonicalRecordFromRecord:measurement error:error];
+    if (canonical == nil) {
+        return NO;
+    }
+    measurement = canonical;
 
     sqlite3 *database = NULL;
     sqlite3_stmt *statement = NULL;
@@ -582,6 +586,9 @@ cleanup:
                 *error = MedisalePersistenceError(MedisalePersistenceErrorInvalidRecord,
                     @"The stored measurement is not valid for the current image.");
             }
+        } else {
+            measurement = [LegacyDistanceMeasurementAdapter
+                canonicalRecordFromRecord:measurement error:error];
         }
     } else if (result != SQLITE_DONE && error != NULL) {
         *error = MedisaleSQLiteError(result, @"read a restore record");
