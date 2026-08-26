@@ -3,14 +3,15 @@ HOROS_HEADERS := $(HOROS_APP)/Contents/Frameworks/Horos.framework/Versions/A/Hea
 BUILD_DIR := build
 BUNDLE := $(BUILD_DIR)/MedisalePlugin.osirixplugin
 EXECUTABLE := $(BUNDLE)/Contents/MacOS/MedisalePlugin
-SOURCES := plugin/MedisalePluginFilter.m plugin/ImageContext.m plugin/HorosAdapter.m plugin/MeasurementContextConsumer.m plugin/TwoPointInputController.m plugin/LineOverlayModel.m plugin/TransientLineOverlayController.m plugin/GuidePreferenceStore.m plugin/GuideEngine.m plugin/MeasurementRecord.m plugin/SQLiteMeasurementStore.m plugin/ViewerInspectorPanelHost.m plugin/CompactGuideViewState.m plugin/CompactGuidePresentation.m plugin/CompactGuideLayoutPolicy.m plugin/CompactGuideLocalization.m plugin/HoldSpacePanState.m plugin/TemporaryPanController.m plugin/CalibrationConfirmationState.m
+SOURCES := plugin/MedisalePluginFilter.m plugin/ImageContext.m plugin/HorosAdapter.m plugin/MeasurementContextConsumer.m plugin/TwoPointInputController.m plugin/LineOverlayModel.m plugin/TransientLineOverlayController.m plugin/GuidePreferenceStore.m plugin/GuideEngine.m plugin/MeasurementRecord.m plugin/MeasurementDomain.m plugin/MeasurementPersistenceDTO.m plugin/LegacyDistanceMeasurementAdapter.m plugin/SQLiteMeasurementStore.m plugin/ViewerInspectorPanelHost.m plugin/CompactGuideViewState.m plugin/CompactGuidePresentation.m plugin/CompactGuideLayoutPolicy.m plugin/CompactGuideLocalization.m plugin/HoldSpacePanState.m plugin/TemporaryPanController.m plugin/CalibrationConfirmationState.m
 RESOURCE_FILES := $(shell find plugin/Resources -type f -print)
 PERSISTENCE_TEST := $(BUILD_DIR)/PersistenceStoreTests
 COMPACT_GUIDE_TEST := $(BUILD_DIR)/CompactGuideTests
 HOLD_SPACE_PAN_TEST := $(BUILD_DIR)/HoldSpacePanTests
 CALIBRATION_CONFIRMATION_TEST := $(BUILD_DIR)/CalibrationConfirmationTests
+MEASUREMENT_DOMAIN_TEST := $(BUILD_DIR)/MeasurementDomainTests
 
-.PHONY: all clean sign verify test-persistence test-compact-guide test-hold-space-pan test-calibration-confirmation
+.PHONY: all clean sign verify test-persistence test-compact-guide test-hold-space-pan test-calibration-confirmation test-measurement-domain
 
 all: $(EXECUTABLE)
 
@@ -109,6 +110,10 @@ verify: sign
 	@rg -q 'MedisaleDisplayRoundingPolicyVersion' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
 	@! rg -q 'ViewerController|DCMPix|DicomImage|NSManagedObject|ROI|NSUserDefaults|standardUserDefaults|CFPreferences|sqlite3_|DicomDatabase|NSURLSession|NSURLConnection|writeToFile|writeToURL|patient|institution|deviceIdentifier|localPath' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
 	@! rg -q 'CompactGuideCalibrationStateCalibrated[[:space:]]*:' plugin/MedisalePluginFilter.m
+	@! rg -q 'AppKit|Cocoa|PluginFilter|OsiriXAPI|ViewerController|DCMPix|DicomImage|NSManagedObject|ROI|sqlite3_|NSUserDefaults|CFPreferences' plugin/MeasurementDomain.h plugin/MeasurementDomain.m plugin/MeasurementPersistenceDTO.h plugin/MeasurementPersistenceDTO.m
+	@! rg -qi 'TPA|TPLO|TTA|postoperative' plugin/MeasurementDomain.h plugin/MeasurementDomain.m plugin/MeasurementPersistenceDTO.h plugin/MeasurementPersistenceDTO.m plugin/LegacyDistanceMeasurementAdapter.h plugin/LegacyDistanceMeasurementAdapter.m
+	@rg -q 'LegacyDistanceMeasurementAdapter' plugin/SQLiteMeasurementStore.m
+	@rg -q 'NSJSONWritingSortedKeys' plugin/MeasurementPersistenceDTO.m
 	@plutil -lint "$(BUNDLE)/Contents/Info.plist"
 	@test "$$(/usr/libexec/PlistBuddy -c 'Print :NSPrincipalClass' "$(BUNDLE)/Contents/Info.plist")" = MedisalePluginFilter
 	@test "$$(/usr/libexec/PlistBuddy -c 'Print :MenuTitles:0' "$(BUNDLE)/Contents/Info.plist")" = 'Medisale Plugin'
@@ -118,9 +123,10 @@ verify: sign
 	@$(MAKE) --no-print-directory test-compact-guide
 	@$(MAKE) --no-print-directory test-hold-space-pan
 	@$(MAKE) --no-print-directory test-calibration-confirmation
+	@$(MAKE) --no-print-directory test-measurement-domain
 	@echo "PASS: ad-hoc-signed arm64 bundle uses the real PluginFilter runtime class"
 
-$(PERSISTENCE_TEST): tests/PersistenceStoreTests.m plugin/ImageContext.m plugin/MeasurementRecord.m plugin/SQLiteMeasurementStore.m
+$(PERSISTENCE_TEST): tests/PersistenceStoreTests.m plugin/ImageContext.m plugin/MeasurementRecord.m plugin/MeasurementDomain.m plugin/MeasurementPersistenceDTO.m plugin/LegacyDistanceMeasurementAdapter.m plugin/SQLiteMeasurementStore.m
 	mkdir -p "$(BUILD_DIR)"
 	clang -arch arm64 -fobjc-arc -fmodules \
 		-isysroot "$$(xcrun --sdk macosx --show-sdk-path)" \
@@ -167,6 +173,18 @@ $(CALIBRATION_CONFIRMATION_TEST): tests/CalibrationConfirmationTests.m plugin/Im
 
 test-calibration-confirmation: $(CALIBRATION_CONFIRMATION_TEST)
 	@"$(CALIBRATION_CONFIRMATION_TEST)"
+
+$(MEASUREMENT_DOMAIN_TEST): tests/MeasurementDomainTests.m plugin/ImageContext.m plugin/MeasurementRecord.m plugin/MeasurementDomain.m plugin/MeasurementPersistenceDTO.m plugin/LegacyDistanceMeasurementAdapter.m
+	mkdir -p "$(BUILD_DIR)"
+	clang -arch arm64 -fobjc-arc -fmodules \
+		-isysroot "$$(xcrun --sdk macosx --show-sdk-path)" \
+		-fmodules-cache-path="$(BUILD_DIR)/ModuleCache" \
+		-mmacosx-version-min=10.15 \
+		-Iplugin -framework Foundation \
+		-o "$@" $^
+
+test-measurement-domain: $(MEASUREMENT_DOMAIN_TEST)
+	@"$(MEASUREMENT_DOMAIN_TEST)"
 
 clean:
 	rm -rf "$(BUILD_DIR)"
