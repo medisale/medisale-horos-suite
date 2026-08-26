@@ -5,6 +5,7 @@
 #import <Notifications.h>
 #import <PluginFilter.h>
 #import "CompactGuideViewState.h"
+#import "CalibrationConfirmationState.h"
 #import "GuideEngine.h"
 #import "GuidePreferenceStore.h"
 #import "HoldSpacePanState.h"
@@ -205,12 +206,10 @@ static NSString *const MedisaleTwoPointToolbarIdentifier = @"jp.medisale.horos.t
         initWithPointA:NSMakePoint(record.endpointAX, record.endpointAY)
                 pointB:NSMakePoint(record.endpointBX, record.endpointBY)
          imageIdentity:context];
-    CompactGuideCalibrationState calibration =
-        context.pixelSpacingX > 0.0 && context.pixelSpacingY > 0.0
-            ? CompactGuideCalibrationStateDICOMSpacingOnly
-            : CompactGuideCalibrationStateUnknown;
+    CalibrationProvenanceModel *calibration =
+        [CalibrationProvenanceModel modelFromImageContext:context];
     CompactGuideViewState *guideState = [[CompactGuideViewState alloc]
-        initWithImageIdentity:context calibrationState:calibration];
+        initWithImageIdentity:context calibrationModel:calibration];
     [guideState markCalculated];
     if (_guideStateByViewer == nil) {
         _guideStateByViewer = [NSMapTable weakToStrongObjectsMapTable];
@@ -366,12 +365,10 @@ static NSString *const MedisaleTwoPointToolbarIdentifier = @"jp.medisale.horos.t
     TwoPointInputController *existing = [_inputByViewer objectForKey:controller];
     [existing cancel];
 
-    CompactGuideCalibrationState calibration =
-        inputIdentity.pixelSpacingX > 0.0 && inputIdentity.pixelSpacingY > 0.0
-            ? CompactGuideCalibrationStateDICOMSpacingOnly
-            : CompactGuideCalibrationStateUnknown;
+    CalibrationProvenanceModel *calibration =
+        [CalibrationProvenanceModel modelFromImageContext:inputIdentity];
     CompactGuideViewState *guideState = [[CompactGuideViewState alloc]
-        initWithImageIdentity:inputIdentity calibrationState:calibration];
+        initWithImageIdentity:inputIdentity calibrationModel:calibration];
     [guideState startCollecting];
     if (_guideStateByViewer == nil) {
         _guideStateByViewer = [NSMapTable weakToStrongObjectsMapTable];

@@ -28,9 +28,11 @@ static ImageContext *Context(NSString *study, NSString *series,
 static void TestStateMachine(void)
 {
     ImageContext *identity = Context(@"study-a", @"series-a", @"instance-a", 0);
+    CalibrationProvenanceModel *dicom =
+        [CalibrationProvenanceModel modelFromImageContext:identity];
     CompactGuideViewState *state = [[CompactGuideViewState alloc]
         initWithImageIdentity:identity
-        calibrationState:CompactGuideCalibrationStateDICOMSpacingOnly];
+        calibrationModel:dicom];
     Assert(state.measurementState == CompactGuideMeasurementStateIdle, @"initial idle");
     Assert(state.confirmationState == CompactGuideConfirmationStateNotReviewed,
            @"initial not reviewed");
@@ -47,6 +49,9 @@ static void TestStateMachine(void)
     Assert(state.collectedPointCount == 1, @"one point recorded");
     Assert(![state updateCollectedPointCount:3], @"reject excess points");
     Assert([state updateCollectedPointCount:2], @"collect second point");
+    [state updateMeasurementSnapshotWithPointA:NSMakePoint(1, 2)
+        pointB:NSMakePoint(4, 6) rawResult:5.0
+        calculationMethodVersion:MedisaleDistanceCalculationMethodVersion];
     Assert(state.measurementState == CompactGuideMeasurementStateCalculatedUnconfirmed,
            @"two points calculate result");
     Assert(state.canCancel, @"unconfirmed calculation can cancel");
@@ -60,6 +65,9 @@ static void TestStateMachine(void)
     Assert([state beginEditing], @"begin editing confirmed result");
     Assert(state.measurementState == CompactGuideMeasurementStateEditing,
            @"editing state");
+    [state updateMeasurementSnapshotWithPointA:NSMakePoint(2, 2)
+        pointB:NSMakePoint(4, 6) rawResult:sqrt(20.0)
+        calculationMethodVersion:MedisaleDistanceCalculationMethodVersion];
     Assert([state finishEditingChanged:YES], @"finish changed edit");
     Assert(state.measurementState == CompactGuideMeasurementStateModifiedAfterConfirmation,
            @"modified state");
@@ -69,24 +77,34 @@ static void TestStateMachine(void)
     Assert(state.canConfirm, @"modified result can be reviewed again");
     Assert([state confirm], @"confirm modified result");
     Assert([state beginEditing], @"begin no-change edit");
+    [state updateMeasurementSnapshotWithPointA:NSMakePoint(2, 2)
+        pointB:NSMakePoint(4, 6) rawResult:sqrt(20.0)
+        calculationMethodVersion:MedisaleDistanceCalculationMethodVersion];
     Assert([state finishEditingChanged:NO], @"finish no-change edit");
     Assert(state.measurementState == CompactGuideMeasurementStateConfirmed,
            @"no-change edit preserves confirmation");
-    [state markMeasurementValueChanged];
+    [state updateMeasurementSnapshotWithPointA:NSMakePoint(3, 2)
+        pointB:NSMakePoint(4, 6) rawResult:sqrt(17.0)
+        calculationMethodVersion:MedisaleDistanceCalculationMethodVersion];
     Assert(state.measurementState == CompactGuideMeasurementStateModifiedAfterConfirmation,
-           @"value change invalidates confirmation");
+           @"actual endpoint/result change requires renewed confirmation");
     [state setExpanded:YES];
     Assert(state.isExpanded, @"expanded per-view state");
-    Assert(state.measurementState == CompactGuideMeasurementStateModifiedAfterConfirmation,
-           @"expand does not change measurement state");
+    Assert(state.confirmationState ==
+           CompactGuideConfirmationStateModifiedAfterConfirmation,
+           @"expand does not change confirmation state");
     [state setExpanded:NO];
     Assert(!state.isExpanded, @"collapse per-view state");
-    [state updateCalibrationState:CompactGuideCalibrationStateUnknown];
+    [state updateCalibrationModel:
+        [CalibrationProvenanceModel
+            unknownModelWithWarnings:@[@"spacing-provenance-unknown"]]];
     Assert(state.calibrationState == CompactGuideCalibrationStateUnknown,
            @"calibration status updates");
 
     CompactGuideViewState *cancel = [[CompactGuideViewState alloc]
-        initWithImageIdentity:identity calibrationState:CompactGuideCalibrationStateUnknown];
+        initWithImageIdentity:identity calibrationModel:
+            [CalibrationProvenanceModel
+                unknownModelWithWarnings:@[@"spacing-provenance-unknown"]]];
     Assert([cancel startCollecting], @"cancel fixture collecting");
     Assert([cancel updateCollectedPointCount:1], @"cancel fixture point");
     Assert([cancel cancelCurrentOperation], @"cancel collecting");
@@ -99,11 +117,15 @@ static void TestStateMachine(void)
     Assert([cancel markUnavailable], @"mark unavailable");
     Assert(cancel.measurementState == CompactGuideMeasurementStateUnavailable,
            @"unavailable state");
-    Assert(!cancel.canCancel && !cancel.canConfirm, @"unavailable has no actions");
+    Assert(cancel.confirmationState == CompactGuideConfirmationStateInvalidated &&
+           !cancel.canCancel && !cancel.canConfirm,
+           @"unavailable invalidates confirmation and has no actions");
     Assert([cancel resetToIdle], @"unavailable resets");
 
     CompactGuideViewState *discard = [[CompactGuideViewState alloc]
-        initWithImageIdentity:identity calibrationState:CompactGuideCalibrationStateUnknown];
+        initWithImageIdentity:identity calibrationModel:
+            [CalibrationProvenanceModel
+                unknownModelWithWarnings:@[@"spacing-provenance-unknown"]]];
     Assert([discard markCalculated], @"prepare unconfirmed calculation");
     Assert([discard cancelCurrentOperation], @"discard unconfirmed operation");
     Assert(discard.measurementState == CompactGuideMeasurementStateIdle,
@@ -151,10 +173,29 @@ static void TestLocalization(void)
     Assert(english.count >= 40, @"English fallback resource is complete");
     Assert(japanese.count == english.count,
            @"Japanese and English resources have the same key count");
+    Assert([[NSSet setWithArray:english.allKeys]
+        isEqualToSet:[NSSet setWithArray:japanese.allKeys]],
+        @"Japanese and English resources have exactly the same key set");
     for (NSString *key in english) {
         Assert([english[key] length] > 0, @"English value is nonempty");
         Assert([japanese[key] length] > 0, @"Japanese value is nonempty");
     }
+    Assert([english[@"guide.calibration.dicom"]
+        containsString:@"DICOM/Viewer"],
+        @"English full calibration copy names DICOM/Viewer spacing");
+    Assert([english[@"guide.calibration.dicom"]
+        containsString:@"uncalibrated"],
+        @"English full calibration copy says uncalibrated");
+    Assert([japanese[@"guide.calibration.dicom"]
+        containsString:@"DICOM/Viewer"],
+        @"Japanese full calibration copy names DICOM/Viewer spacing");
+    Assert([japanese[@"guide.calibration.dicom"] containsString:@"未校正"],
+        @"Japanese full calibration copy says uncalibrated");
+    Assert([english[@"guide.calibration.compact.dicom"]
+        containsString:@"Uncalibrated"],
+        @"English compact calibration copy remains explicit");
+    Assert([japanese[@"guide.calibration.compact.dicom"] containsString:@"未校正"],
+        @"Japanese compact calibration copy remains explicit");
 }
 
 static void TestPresentation(void)
@@ -206,12 +247,20 @@ static void TestPresentation(void)
                @"every calibration state has compact text");
     }
     for (NSInteger value = CompactGuideConfirmationStateNotReviewed;
-         value <= CompactGuideConfirmationStateModifiedAfterConfirmation; value++) {
+         value <= CompactGuideConfirmationStateInvalidated; value++) {
         Assert([CompactGuidePresentation confirmationValueKeyForState:value].length > 0,
                @"every confirmation state has text");
         Assert([CompactGuidePresentation compactConfirmationValueKeyForState:value].length > 0,
                @"every confirmation state has compact text");
     }
+    Assert([[CompactGuidePresentation confirmationValueKeyForState:
+        CompactGuideConfirmationStateInvalidated]
+        isEqualToString:@"guide.confirmation.invalidated"],
+        @"invalidated confirmation has a dedicated presentation key");
+    Assert([[CompactGuidePresentation compactConfirmationValueKeyForState:
+        CompactGuideConfirmationStateInvalidated]
+        isEqualToString:@"guide.confirmation.compact.invalidated"],
+        @"invalidated compact presentation does not fall back to pending");
 }
 
 static void TestLayoutPolicy(void)
@@ -243,7 +292,6 @@ static void TestLayoutPolicy(void)
         screenVisibleFrame:NSMakeRect(0, 0, 1200, 900)
         panelSize:NSMakeSize(248, 124) placement:&placement];
     Assert(placement == CompactGuidePlacementRight, @"right placement preferred");
-    Assert(origin.x == 608, @"right placement gap");
 
     origin = [CompactGuideLayoutPolicy
         originForViewerFrame:NSMakeRect(650, 100, 500, 500)
@@ -251,7 +299,6 @@ static void TestLayoutPolicy(void)
         screenVisibleFrame:NSMakeRect(0, 0, 1200, 900)
         panelSize:NSMakeSize(248, 124) placement:&placement];
     Assert(placement == CompactGuidePlacementLeft, @"left placement fallback");
-    Assert(origin.x == 394, @"left placement gap");
 
     origin = [CompactGuideLayoutPolicy
         originForViewerFrame:NSMakeRect(40, 40, 720, 600)

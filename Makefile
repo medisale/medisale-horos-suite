@@ -3,13 +3,14 @@ HOROS_HEADERS := $(HOROS_APP)/Contents/Frameworks/Horos.framework/Versions/A/Hea
 BUILD_DIR := build
 BUNDLE := $(BUILD_DIR)/MedisalePlugin.osirixplugin
 EXECUTABLE := $(BUNDLE)/Contents/MacOS/MedisalePlugin
-SOURCES := plugin/MedisalePluginFilter.m plugin/ImageContext.m plugin/HorosAdapter.m plugin/MeasurementContextConsumer.m plugin/TwoPointInputController.m plugin/LineOverlayModel.m plugin/TransientLineOverlayController.m plugin/GuidePreferenceStore.m plugin/GuideEngine.m plugin/MeasurementRecord.m plugin/SQLiteMeasurementStore.m plugin/ViewerInspectorPanelHost.m plugin/CompactGuideViewState.m plugin/CompactGuidePresentation.m plugin/CompactGuideLayoutPolicy.m plugin/CompactGuideLocalization.m plugin/HoldSpacePanState.m plugin/TemporaryPanController.m
+SOURCES := plugin/MedisalePluginFilter.m plugin/ImageContext.m plugin/HorosAdapter.m plugin/MeasurementContextConsumer.m plugin/TwoPointInputController.m plugin/LineOverlayModel.m plugin/TransientLineOverlayController.m plugin/GuidePreferenceStore.m plugin/GuideEngine.m plugin/MeasurementRecord.m plugin/SQLiteMeasurementStore.m plugin/ViewerInspectorPanelHost.m plugin/CompactGuideViewState.m plugin/CompactGuidePresentation.m plugin/CompactGuideLayoutPolicy.m plugin/CompactGuideLocalization.m plugin/HoldSpacePanState.m plugin/TemporaryPanController.m plugin/CalibrationConfirmationState.m
 RESOURCE_FILES := $(shell find plugin/Resources -type f -print)
 PERSISTENCE_TEST := $(BUILD_DIR)/PersistenceStoreTests
 COMPACT_GUIDE_TEST := $(BUILD_DIR)/CompactGuideTests
 HOLD_SPACE_PAN_TEST := $(BUILD_DIR)/HoldSpacePanTests
+CALIBRATION_CONFIRMATION_TEST := $(BUILD_DIR)/CalibrationConfirmationTests
 
-.PHONY: all clean sign verify test-persistence test-compact-guide test-hold-space-pan
+.PHONY: all clean sign verify test-persistence test-compact-guide test-hold-space-pan test-calibration-confirmation
 
 all: $(EXECUTABLE)
 
@@ -93,6 +94,21 @@ verify: sign
 	@rg -q 'CGEventSourceKeyState' plugin/TemporaryPanController.m
 	@! rg -q 'setCurrentTool:|currentTool[[:space:]]*=|setOrigin:|\.origin[[:space:]]*=|tTranslate|NSManagedObject|NSUserDefaults|standardUserDefaults|CFPreferences|addROI|setROI|saveDocument|writeToFile|sqlite3_|DicomDatabase|NSURLSession|NSURLConnection' plugin/HoldSpacePanState.h plugin/HoldSpacePanState.m plugin/TemporaryPanController.h plugin/TemporaryPanController.m
 	@! rg -q 'ViewerController|DCMPix|DicomImage|NSManagedObject|ROI|NSUserDefaults|CFPreferences|sqlite3_' plugin/HoldSpacePanState.h plugin/HoldSpacePanState.m
+	@rg -q 'MedisaleCalibrationStateDICOMSpacingOnly' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
+	@rg -q 'MedisaleCalibrationSourceCategoryHorosRuntimeImageSpacing' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
+	@rg -q 'MedisaleCalibrationDerivationStatusTagLevelUnverified' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
+	@rg -q 'MedisaleWarningCodeIsSafe' plugin/CalibrationConfirmationState.m
+	@rg -q 'MedisalePointIsInsideImage' plugin/CalibrationConfirmationState.m
+	@! rg -q 'dicom-pixel-spacing|MedisaleCalibrationSourceCategoryDICOMDerived|MedisaleCalibrationDerivationStatusDICOMDerived' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
+	@! rg -q 'markMeasurementValueChanged|nextafter' plugin/CompactGuideViewState.h plugin/CompactGuideViewState.m
+	@rg -q 'MedisaleConfirmationStateInvalidated' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m plugin/CompactGuidePresentation.m
+	@rg -q '"guide.confirmation.compact.invalidated"' plugin/Resources/en.lproj/Localizable.strings plugin/Resources/ja.lproj/Localizable.strings
+	@rg -q 'rowSpacing' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m plugin/ViewerInspectorPanelHost.m
+	@rg -q 'columnSpacing' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m plugin/ViewerInspectorPanelHost.m
+	@rg -q 'rawResult' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
+	@rg -q 'MedisaleDisplayRoundingPolicyVersion' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
+	@! rg -q 'ViewerController|DCMPix|DicomImage|NSManagedObject|ROI|NSUserDefaults|standardUserDefaults|CFPreferences|sqlite3_|DicomDatabase|NSURLSession|NSURLConnection|writeToFile|writeToURL|patient|institution|deviceIdentifier|localPath' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
+	@! rg -q 'CompactGuideCalibrationStateCalibrated[[:space:]]*:' plugin/MedisalePluginFilter.m
 	@plutil -lint "$(BUNDLE)/Contents/Info.plist"
 	@test "$$(/usr/libexec/PlistBuddy -c 'Print :NSPrincipalClass' "$(BUNDLE)/Contents/Info.plist")" = MedisalePluginFilter
 	@test "$$(/usr/libexec/PlistBuddy -c 'Print :MenuTitles:0' "$(BUNDLE)/Contents/Info.plist")" = 'Medisale Plugin'
@@ -101,6 +117,7 @@ verify: sign
 	@$(MAKE) --no-print-directory test-persistence
 	@$(MAKE) --no-print-directory test-compact-guide
 	@$(MAKE) --no-print-directory test-hold-space-pan
+	@$(MAKE) --no-print-directory test-calibration-confirmation
 	@echo "PASS: ad-hoc-signed arm64 bundle uses the real PluginFilter runtime class"
 
 $(PERSISTENCE_TEST): tests/PersistenceStoreTests.m plugin/ImageContext.m plugin/MeasurementRecord.m plugin/SQLiteMeasurementStore.m
@@ -115,7 +132,7 @@ $(PERSISTENCE_TEST): tests/PersistenceStoreTests.m plugin/ImageContext.m plugin/
 test-persistence: $(PERSISTENCE_TEST)
 	@"$(PERSISTENCE_TEST)"
 
-$(COMPACT_GUIDE_TEST): tests/CompactGuideTests.m plugin/ImageContext.m plugin/CompactGuideViewState.m plugin/CompactGuidePresentation.m plugin/CompactGuideLayoutPolicy.m plugin/CompactGuideLocalization.m
+$(COMPACT_GUIDE_TEST): tests/CompactGuideTests.m plugin/ImageContext.m plugin/CalibrationConfirmationState.m plugin/CompactGuideViewState.m plugin/CompactGuidePresentation.m plugin/CompactGuideLayoutPolicy.m plugin/CompactGuideLocalization.m
 	mkdir -p "$(BUILD_DIR)"
 	clang -arch arm64 -fobjc-arc -fmodules \
 		-isysroot "$$(xcrun --sdk macosx --show-sdk-path)" \
@@ -138,6 +155,18 @@ $(HOLD_SPACE_PAN_TEST): tests/HoldSpacePanTests.m plugin/ImageContext.m plugin/H
 
 test-hold-space-pan: $(HOLD_SPACE_PAN_TEST)
 	@"$(HOLD_SPACE_PAN_TEST)"
+
+$(CALIBRATION_CONFIRMATION_TEST): tests/CalibrationConfirmationTests.m plugin/ImageContext.m plugin/CalibrationConfirmationState.m
+	mkdir -p "$(BUILD_DIR)"
+	clang -arch arm64 -fobjc-arc -fmodules \
+		-isysroot "$$(xcrun --sdk macosx --show-sdk-path)" \
+		-fmodules-cache-path="$(BUILD_DIR)/ModuleCache" \
+		-mmacosx-version-min=10.15 \
+		-Iplugin -framework Cocoa \
+		-o "$@" $^
+
+test-calibration-confirmation: $(CALIBRATION_CONFIRMATION_TEST)
+	@"$(CALIBRATION_CONFIRMATION_TEST)"
 
 clean:
 	rm -rf "$(BUILD_DIR)"

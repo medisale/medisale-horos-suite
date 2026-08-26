@@ -1,5 +1,7 @@
 #import <Foundation/Foundation.h>
 
+#import "CalibrationConfirmationState.h"
+
 @class ImageContext;
 
 NS_ASSUME_NONNULL_BEGIN
@@ -15,16 +17,20 @@ typedef NS_ENUM(NSInteger, CompactGuideMeasurementState) {
     CompactGuideMeasurementStateUnavailable,
 };
 
-typedef NS_ENUM(NSInteger, CompactGuideCalibrationState) {
-    CompactGuideCalibrationStateCalibrated = 0,
-    CompactGuideCalibrationStateDICOMSpacingOnly,
-    CompactGuideCalibrationStateUnknown,
+typedef MedisaleCalibrationState CompactGuideCalibrationState;
+enum {
+    CompactGuideCalibrationStateCalibrated = MedisaleCalibrationStateCalibrated,
+    CompactGuideCalibrationStateDICOMSpacingOnly = MedisaleCalibrationStateDICOMSpacingOnly,
+    CompactGuideCalibrationStateUnknown = MedisaleCalibrationStateUnknown,
 };
 
-typedef NS_ENUM(NSInteger, CompactGuideConfirmationState) {
-    CompactGuideConfirmationStateNotReviewed = 0,
-    CompactGuideConfirmationStateUserConfirmed,
-    CompactGuideConfirmationStateModifiedAfterConfirmation,
+typedef MedisaleConfirmationState CompactGuideConfirmationState;
+enum {
+    CompactGuideConfirmationStateNotReviewed = MedisaleConfirmationStateUnreviewed,
+    CompactGuideConfirmationStateUserConfirmed = MedisaleConfirmationStateUserConfirmed,
+    CompactGuideConfirmationStateModifiedAfterConfirmation =
+        MedisaleConfirmationStateModifiedAfterConfirmation,
+    CompactGuideConfirmationStateInvalidated = MedisaleConfirmationStateInvalidated,
 };
 
 FOUNDATION_EXPORT NSNotificationName const CompactGuideViewStateDidChangeNotification;
@@ -35,13 +41,15 @@ FOUNDATION_EXPORT NSNotificationName const CompactGuideViewStateDidChangeNotific
 @property(nonatomic, readonly) CompactGuideMeasurementState measurementState;
 @property(nonatomic, readonly) CompactGuideCalibrationState calibrationState;
 @property(nonatomic, readonly) CompactGuideConfirmationState confirmationState;
+@property(nonatomic, copy, readonly) CalibrationProvenanceModel *calibrationModel;
+@property(nonatomic, strong, readonly) ConfirmationStateModel *confirmationModel;
 @property(nonatomic, readonly) NSUInteger collectedPointCount;
 @property(nonatomic, readonly, getter=isExpanded) BOOL expanded;
 @property(nonatomic, readonly) BOOL canCancel;
 @property(nonatomic, readonly) BOOL canConfirm;
 
 - (instancetype)initWithImageIdentity:(ImageContext *)imageIdentity
-                     calibrationState:(CompactGuideCalibrationState)calibrationState
+                      calibrationModel:(CalibrationProvenanceModel *)calibrationModel
     NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 
@@ -56,8 +64,11 @@ FOUNDATION_EXPORT NSNotificationName const CompactGuideViewStateDidChangeNotific
 - (BOOL)markUnavailable;
 - (BOOL)resetToIdle;
 - (void)setExpanded:(BOOL)expanded;
-- (void)updateCalibrationState:(CompactGuideCalibrationState)calibrationState;
-- (void)markMeasurementValueChanged;
+- (void)updateCalibrationModel:(CalibrationProvenanceModel *)calibrationModel;
+- (void)updateMeasurementSnapshotWithPointA:(NSPoint)pointA
+                                      pointB:(NSPoint)pointB
+                                   rawResult:(double)rawResult
+                    calculationMethodVersion:(NSString *)calculationMethodVersion;
 - (BOOL)matchesImageContext:(nullable ImageContext *)imageContext;
 
 @end

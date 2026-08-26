@@ -80,6 +80,7 @@
         [self applyExistingMeasurement:existingMeasurement];
         if (model != nil) {
             _previousInputState = model.inputState;
+            [self syncReviewSnapshotFromModel];
         }
     }
     return self;
@@ -110,6 +111,7 @@ existingMeasurement:(MeasurementRecord *)existingMeasurement
     self.editOriginA = model.pointA;
     self.editOriginB = model.pointB;
     [self applyExistingMeasurement:existingMeasurement];
+    [self syncReviewSnapshotFromModel];
     if (self.bound) {
         [self installModelObserver];
     }
@@ -356,7 +358,19 @@ existingMeasurement:(MeasurementRecord *)existingMeasurement
         [self.guideState finishEditingChanged:changed];
     }
     self.previousInputState = model.inputState;
+    [self syncReviewSnapshotFromModel];
     [self updateFieldsAndLayout:NO];
+}
+
+- (void)syncReviewSnapshotFromModel
+{
+    LineOverlayModel *model = self.model;
+    if (model == nil) {
+        return;
+    }
+    [self.guideState updateMeasurementSnapshotWithPointA:model.pointA
+        pointB:model.pointB rawResult:model.pixelDistance
+        calculationMethodVersion:MedisaleDistanceCalculationMethodVersion];
 }
 
 - (NSString *)progressTextForState:(CompactGuideMeasurementState)state
@@ -407,6 +421,8 @@ existingMeasurement:(MeasurementRecord *)existingMeasurement
     } else if (state.confirmationState ==
                CompactGuideConfirmationStateModifiedAfterConfirmation) {
         confirmationIconName = NSImageNameStatusPartiallyAvailable;
+    } else if (state.confirmationState == CompactGuideConfirmationStateInvalidated) {
+        confirmationIconName = NSImageNameStatusUnavailable;
     }
     self.confirmationIcon.image = [NSImage imageNamed:confirmationIconName];
     self.confirmationField.stringValue = [NSString stringWithFormat:@"%@: %@",
@@ -454,8 +470,22 @@ existingMeasurement:(MeasurementRecord *)existingMeasurement
             self.model.pointA.x, self.model.pointA.y,
             self.model.pointB.x, self.model.pointB.y,
             self.model.pixelDistance];
-        self.detailsField.stringValue = [NSString stringWithFormat:@"%@\n\n%@",
-            [l stringForKey:@"guide.details.body"], coordinates];
+        CalibrationProvenanceModel *calibration = state.calibrationModel;
+        NSString *spacingDetails = nil;
+        if (calibration.hasUsableSpacing) {
+            NSString *row = [MeasurementValueFormatter
+                displayStringForRawValue:calibration.rowSpacing precision:4
+                locale:NSLocale.currentLocale];
+            NSString *column = [MeasurementValueFormatter
+                displayStringForRawValue:calibration.columnSpacing precision:4
+                locale:NSLocale.currentLocale];
+            spacingDetails = [NSString stringWithFormat:
+                [l stringForKey:@"guide.details.spacing.format"], row, column];
+        } else {
+            spacingDetails = [l stringForKey:@"guide.details.spacing.unavailable"];
+        }
+        self.detailsField.stringValue = [NSString stringWithFormat:@"%@\n\n%@\n%@",
+            [l stringForKey:@"guide.details.body"], coordinates, spacingDetails];
         self.saveButton.enabled = self.model.inputState == LineOverlayInputStateComplete;
         if (self.hasSaved) {
             BOOL unchanged = NSEqualPoints(self.model.pointA, self.savedPointA) &&
@@ -550,6 +580,7 @@ existingMeasurement:(MeasurementRecord *)existingMeasurement
 - (void)confirmPressed:(id)sender
 {
     (void)sender;
+    [self syncReviewSnapshotFromModel];
     if (![self.guideState confirm]) {
         NSBeep();
     }
