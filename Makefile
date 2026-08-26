@@ -112,6 +112,13 @@ verify: sign
 	@! rg -q 'CompactGuideCalibrationStateCalibrated[[:space:]]*:' plugin/MedisalePluginFilter.m
 	@! rg -q 'AppKit|Cocoa|PluginFilter|OsiriXAPI|ViewerController|DCMPix|DicomImage|NSManagedObject|ROI|sqlite3_|NSUserDefaults|CFPreferences' plugin/MeasurementDomain.h plugin/MeasurementDomain.m plugin/MeasurementPersistenceDTO.h plugin/MeasurementPersistenceDTO.m
 	@! rg -qi 'TPA|TPLO|TTA|postoperative' plugin/MeasurementDomain.h plugin/MeasurementDomain.m plugin/MeasurementPersistenceDTO.h plugin/MeasurementPersistenceDTO.m plugin/LegacyDistanceMeasurementAdapter.h plugin/LegacyDistanceMeasurementAdapter.m
+	@rg -q 'MeasurementMethodEvaluating' plugin/MeasurementDomain.h plugin/MeasurementDomain.m
+	@! sed -n '/@implementation MeasurementDomainSnapshot/,/@end/p' plugin/MeasurementDomain.m | rg -q 'EndpointA|EndpointB|hypot'
+	@test "$$(rg -c 'hypot\(' plugin/MeasurementDomain.m)" = 1
+	@! rg -q 'MeasurementCalibrationReference|MeasurementReviewAssociation|MedisaleMeasurementCalibrationState|MedisaleMeasurementCalibrationProvenance' plugin/MeasurementDomain.h plugin/MeasurementDomain.m
+	@rg -q 'MedisaleCalibrationStateUnknown' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
+	@rg -q 'MedisaleCalibrationStateDICOMSpacingOnly' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
+	@rg -q 'MedisaleCalibrationStateCalibrated' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
 	@rg -q 'LegacyDistanceMeasurementAdapter' plugin/SQLiteMeasurementStore.m
 	@rg -q 'NSJSONWritingSortedKeys' plugin/MeasurementPersistenceDTO.m
 	@plutil -lint "$(BUNDLE)/Contents/Info.plist"

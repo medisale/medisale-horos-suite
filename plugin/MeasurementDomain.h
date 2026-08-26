@@ -29,28 +29,43 @@ typedef NS_ENUM(NSInteger, MedisaleMeasurementWarningCode) {
     MedisaleMeasurementWarningTagProvenanceUnverified = 3,
 };
 
-typedef NS_ENUM(NSInteger, MedisaleMeasurementCalibrationState) {
-    MedisaleMeasurementCalibrationStateUnknown = 1,
-    MedisaleMeasurementCalibrationStateRuntimeSpacingUncalibrated = 2,
-    MedisaleMeasurementCalibrationStateExplicit = 3,
-};
+@class NamedLandmarkSnapshot;
+@class VersionedMeasurementResult;
 
-typedef NS_ENUM(NSInteger, MedisaleMeasurementCalibrationProvenance) {
-    MedisaleMeasurementCalibrationProvenanceNone = 1,
-    MedisaleMeasurementCalibrationProvenanceHorosRuntimeSpacing = 2,
-    MedisaleMeasurementCalibrationProvenanceExplicit = 3,
-};
+@protocol MeasurementMethodEvaluating <NSObject>
+@property(nonatomic, readonly) MedisaleMeasurementKind measurementKind;
+@property(nonatomic, copy, readonly) NSString *stableKindCode;
+@property(nonatomic, copy, readonly) NSString *stableMethodIdentifier;
+@property(nonatomic, readonly) NSInteger methodVersion;
+@property(nonatomic, copy, readonly) NSArray<NSNumber *> *requiredLandmarkIdentifiers;
+@property(nonatomic, readonly) MedisaleMeasurementUnit resultUnit;
+- (nullable NSString *)stableCodeForLandmarkIdentifier:
+    (MedisaleLandmarkIdentifier)identifier;
+- (MedisaleLandmarkIdentifier)landmarkIdentifierForStableCode:(NSString *)stableCode;
+- (BOOL)validateLandmarkSnapshot:(NamedLandmarkSnapshot *)landmarks
+                          result:(VersionedMeasurementResult *)result
+                           error:(NSError * _Nullable * _Nullable)error;
+@end
 
 @interface MeasurementMethodDefinition : NSObject <NSCopying>
 @property(nonatomic, readonly) MedisaleMeasurementKind kind;
+@property(nonatomic, copy, readonly) NSString *stableKindCode;
 @property(nonatomic, copy, readonly) NSString *stableIdentifier;
 @property(nonatomic, readonly) NSInteger version;
 @property(nonatomic, copy, readonly) NSArray<NSNumber *> *requiredLandmarkIdentifiers;
 @property(nonatomic, readonly) MedisaleMeasurementUnit resultUnit;
+@property(nonatomic, strong, readonly) id<MeasurementMethodEvaluating> evaluator;
 + (instancetype)legacyImageDistanceV1;
 + (nullable instancetype)definitionForKind:(MedisaleMeasurementKind)kind
                                    version:(NSInteger)version
                                      error:(NSError * _Nullable * _Nullable)error;
++ (nullable instancetype)definitionForStableKindCode:(NSString *)stableKindCode
+                              stableMethodIdentifier:(NSString *)stableMethodIdentifier
+                                             version:(NSInteger)version
+                                               error:(NSError * _Nullable * _Nullable)error;
+- (nullable NSString *)stableCodeForLandmarkIdentifier:
+    (MedisaleLandmarkIdentifier)identifier;
+- (MedisaleLandmarkIdentifier)landmarkIdentifierForStableCode:(NSString *)stableCode;
 - (instancetype)init NS_UNAVAILABLE;
 @end
 
@@ -114,34 +129,6 @@ typedef NS_ENUM(NSInteger, MedisaleMeasurementCalibrationProvenance) {
 + (nullable instancetype)snapshotWithLandmarks:(NamedLandmarkSnapshot *)landmarks
                                         result:(VersionedMeasurementResult *)result
                                          error:(NSError * _Nullable * _Nullable)error;
-- (instancetype)init NS_UNAVAILABLE;
-@end
-
-@interface MeasurementCalibrationReference : NSObject <NSCopying>
-@property(nonatomic, readonly) MedisaleMeasurementCalibrationState state;
-@property(nonatomic, readonly) MedisaleMeasurementCalibrationProvenance provenance;
-@property(nonatomic, readonly) NSInteger schemaVersion;
-@property(nonatomic, readonly) NSInteger methodVersion;
-@property(nonatomic, readonly) double rowSpacing;
-@property(nonatomic, readonly) double columnSpacing;
-+ (nullable instancetype)referenceWithState:(MedisaleMeasurementCalibrationState)state
-                                  provenance:(MedisaleMeasurementCalibrationProvenance)provenance
-                               schemaVersion:(NSInteger)schemaVersion
-                               methodVersion:(NSInteger)methodVersion
-                                  rowSpacing:(double)rowSpacing
-                               columnSpacing:(double)columnSpacing
-                                       error:(NSError * _Nullable * _Nullable)error;
-- (instancetype)init NS_UNAVAILABLE;
-@end
-
-@interface MeasurementReviewAssociation : NSObject <NSCopying>
-@property(nonatomic, copy, readonly) MeasurementDomainSnapshot *snapshot;
-@property(nonatomic, copy, readonly) MeasurementCalibrationReference *calibration;
-@property(nonatomic, copy, readonly) NSString *inputFingerprint;
-+ (nullable instancetype)associationWithSnapshot:(MeasurementDomainSnapshot *)snapshot
-                                     calibration:(MeasurementCalibrationReference *)calibration
-                                           error:(NSError * _Nullable * _Nullable)error;
-- (BOOL)hasSameInputsAsAssociation:(MeasurementReviewAssociation *)other;
 - (instancetype)init NS_UNAVAILABLE;
 @end
 

@@ -25,10 +25,18 @@ overlay, panel, clinical method, or Horos runtime behavior was added or changed.
   unit and validity enums, method identity, and a bounded warning-code set. It
   stores no presentation or localized display value.
 - Snapshot construction verifies that the legacy raw distance matches the named
-  image-coordinate inputs without introducing artificial numeric changes.
-- Calibration association is a separate typed value with explicit state,
-  provenance, schema version, method version, and spacing consistency. A review
-  fingerprint changes for real landmark, result, context, or calibration changes.
+  image-coordinate inputs without introducing artificial numeric changes. The
+  generic snapshot delegates this check to a typed pure method evaluator and does
+  not reference endpoint names or a calculation formula.
+- The legacy distance V1 evaluator is the only measurement-domain component that
+  knows endpoint A, endpoint B, and the distance calculation. Method identity,
+  landmark serialization codes, required landmarks, units, and result validation
+  are owned by that evaluator contract.
+- Calibration state and confirmation association are not redefined in this issue.
+  The Issue #32 `CalibrationProvenanceModel` remains the single canonical state,
+  provenance, derivation, version, spacing, warning, round-trip, and confirmation
+  implementation. Generic association integration is explicitly deferred to
+  Issue #45.
 - The persistence DTO is typed and versioned. Serialization is centralized,
   deterministic, and fail-closed for exact key sets, unsupported versions,
   unsupported units, unsafe warnings, invalid context, and corrupt landmarks.
@@ -43,16 +51,16 @@ overlay, panel, clinical method, or Horos runtime behavior was added or changed.
 
 ## Files changed
 
-- `plugin/MeasurementDomain.h` and `.m`: pure immutable method, context,
-  landmark, result, calibration-reference, review-association, and snapshot types.
+- `plugin/MeasurementDomain.h` and `.m`: pure immutable evaluator, method,
+  context, landmark, result, and snapshot types.
 - `plugin/MeasurementPersistenceDTO.h` and `.m`: strict versioned DTO and
   deterministic JSON boundary.
 - `plugin/LegacyDistanceMeasurementAdapter.h` and `.m`: explicit legacy A/B
   conversion and restoration boundary.
 - `plugin/SQLiteMeasurementStore.m`: validates legacy save and restore through
   the typed adapter without changing its schema or transaction ownership.
-- `tests/MeasurementDomainTests.m`: pure domain, DTO, calibration association,
-  and legacy compatibility tests.
+- `tests/MeasurementDomainTests.m`: pure evaluator, domain, DTO, and legacy
+  compatibility tests.
 - `Makefile`: adds the new source and test targets plus architecture boundary
   checks.
 - This anonymous architecture report.
@@ -64,12 +72,12 @@ plug-in bundle, screenshot, or runtime artifact is tracked.
 
 | Test | Result |
 | --- | --- |
-| Named-landmark domain and DTO | PASS — 232 assertions |
+| Named-landmark domain and DTO | PASS — 273 assertions |
 | Transactional persistence regression | PASS — 153 assertions |
 | Compact Guide regression | PASS — 249 assertions |
 | Hold-Space PAN regression | PASS — 46 assertions |
 | Calibration and confirmation regression | PASS — 179 assertions |
-| Total model assertions | PASS — 859 assertions |
+| Total model assertions | PASS — 900 assertions |
 | Clean arm64 candidate build | PASS |
 | Real `PluginFilter` and OsiriXAPI linkage checks | PASS |
 | Candidate-only ad-hoc signature verification | PASS |
@@ -81,6 +89,10 @@ plug-in bundle, screenshot, or runtime artifact is tracked.
 - Valid named-landmark data round-tripped through the typed DTO with an identical
   raw double value and deterministic serialized bytes.
 - Reordered dictionary fields decoded to the same typed contract.
+- The generic snapshot accepted a registered evaluator result, propagated an
+  evaluator rejection, and contained no endpoint identifier or formula reference.
+- Known legacy evaluator vectors returned their exact image-coordinate distances;
+  unknown method identities and future versions failed closed.
 - Missing, duplicate, unknown, non-finite, out-of-bounds, negative-frame,
   invalid-dimension, unsafe-warning, unsupported-unit, corrupt, partial, and
   future-version inputs all failed closed with bounded errors.
@@ -107,6 +119,9 @@ plug-in bundle, screenshot, or runtime artifact is tracked.
   version; unknown methods fail closed.
 - Existing Viewer, overlay, panel, and controller code remains two-point-specific.
   Its refactor is intentionally deferred to Issues #44 and #45.
+- Calibration and confirmation remain solely in the canonical Issue #32 model.
+  Their measurement-neutral association is not claimed by this issue and is an
+  explicit dependency for Issue #45.
 - The successful arm64 build still reports deprecation warnings originating from
   installed Horos legacy headers.
 
@@ -116,11 +131,14 @@ plug-in bundle, screenshot, or runtime artifact is tracked.
   domain does not know about storage, SQLite, UI, or Horos runtime objects.
 - Landmark meaning is explicit and separate from array order. Raw result values
   and presentation values are separate by construction.
+- Generic snapshot validation depends on a typed evaluator protocol. Adding a
+  future registered method does not add landmark names or formulas to the generic
+  snapshot or DTO.
 - Legacy compatibility is isolated in one adapter instead of adding persistence
   responsibility to the old record class.
-- Calibration and confirmation inputs can be associated through typed immutable
-  fingerprints without changing raw measurements or merging calibration into the
-  generic snapshot.
+- Calibration and confirmation retain the one existing canonical model. Existing
+  tests continue to prove unknown, runtime-spacing-only, explicit, round-trip,
+  actual-input-change, and no-fake-raw-mutation behavior.
 - Issues #44 and #45 remain required before a clinical measurement issue can use
   a neutral Viewer session, overlay, panel, or registry.
 

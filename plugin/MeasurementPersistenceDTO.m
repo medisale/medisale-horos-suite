@@ -66,26 +66,6 @@ static BOOL MedisaleDTOIdentifier(NSString *value)
     return [value rangeOfCharacterFromSet:invalid].location == NSNotFound;
 }
 
-static NSString *MedisaleKindCode(MedisaleMeasurementKind kind)
-{
-    return kind == MedisaleMeasurementKindLegacyImageDistance
-        ? @"legacy-image-distance" : nil;
-}
-
-static NSString *MedisaleLandmarkCode(MedisaleLandmarkIdentifier identifier)
-{
-    if (identifier == MedisaleLandmarkIdentifierEndpointA) return @"endpoint-a";
-    if (identifier == MedisaleLandmarkIdentifierEndpointB) return @"endpoint-b";
-    return nil;
-}
-
-static MedisaleLandmarkIdentifier MedisaleLandmarkFromCode(NSString *code)
-{
-    if ([code isEqualToString:@"endpoint-a"]) return MedisaleLandmarkIdentifierEndpointA;
-    if ([code isEqualToString:@"endpoint-b"]) return MedisaleLandmarkIdentifierEndpointB;
-    return 0;
-}
-
 static NSString *MedisaleUnitCode(MedisaleMeasurementUnit unit)
 {
     return unit == MedisaleMeasurementUnitPixels ? @"px" : nil;
@@ -171,7 +151,7 @@ static MedisaleMeasurementWarningCode MedisaleWarningFromCode(NSString *code)
     NSMutableArray *landmarkValues = [NSMutableArray array];
     for (NamedImageLandmark *landmark in landmarks.landmarks) {
         [landmarkValues addObject:@{
-            @"id": MedisaleLandmarkCode(landmark.identifier),
+            @"id": [method stableCodeForLandmarkIdentifier:landmark.identifier],
             @"x": @(landmark.imagePoint.x),
             @"y": @(landmark.imagePoint.y),
         }];
@@ -183,7 +163,7 @@ static MedisaleMeasurementWarningCode MedisaleWarningFromCode(NSString *code)
     NSDictionary *domain = @{
         @"schemaVersion": @(MedisaleMeasurementDomainSchemaVersion),
         @"method": @{
-            @"kind": MedisaleKindCode(method.kind),
+            @"kind": method.stableKindCode,
             @"identifier": method.stableIdentifier,
             @"version": @(method.version),
         },
@@ -291,15 +271,15 @@ static MedisaleMeasurementWarningCode MedisaleWarningFromCode(NSString *code)
     NSString *kindCode = methodValues[@"kind"];
     NSString *methodIdentifier = methodValues[@"identifier"];
     NSNumber *methodVersion = methodValues[@"version"];
-    if (![kindCode isEqualToString:@"legacy-image-distance"] ||
-        ![methodIdentifier isEqualToString:@"image-distance"] ||
+    if (![kindCode isKindOfClass:NSString.class] ||
+        ![methodIdentifier isKindOfClass:NSString.class] ||
         !MedisaleDTOInteger(methodVersion)) {
         MedisaleDTOSetError(error, MedisaleMeasurementDTOErrorUnsupportedVersion,
             @"The measurement method identity is unsupported.");
         return nil;
     }
     MeasurementMethodDefinition *method = [MeasurementMethodDefinition
-        definitionForKind:MedisaleMeasurementKindLegacyImageDistance
+        definitionForStableKindCode:kindCode stableMethodIdentifier:methodIdentifier
         version:methodVersion.integerValue error:error];
     if (method == nil) return nil;
 
@@ -331,7 +311,8 @@ static MedisaleMeasurementWarningCode MedisaleWarningFromCode(NSString *code)
         NSString *identifierCode = candidate[@"id"];
         NSNumber *x = candidate[@"x"];
         NSNumber *y = candidate[@"y"];
-        MedisaleLandmarkIdentifier identifier = MedisaleLandmarkFromCode(identifierCode);
+        MedisaleLandmarkIdentifier identifier =
+            [method landmarkIdentifierForStableCode:identifierCode];
         if (identifier == 0 || !MedisaleDTONumber(x) || !MedisaleDTONumber(y)) {
             MedisaleDTOSetError(error, MedisaleMeasurementDTOErrorInvalidDomain,
                 @"A named landmark DTO value is invalid.");

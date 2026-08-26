@@ -154,8 +154,13 @@ static void TestNamedLandmarks(void)
         landmarks:@[a, a] error:&error] == nil && error != nil,
         @"duplicate landmark rejected");
     error = nil;
-    Assert([NamedImageLandmark landmarkWithIdentifier:99 imagePoint:NSZeroPoint
-        error:&error] == nil && error != nil, @"unknown landmark identifier rejected");
+    NamedImageLandmark *unknown = [NamedImageLandmark landmarkWithIdentifier:99
+        imagePoint:NSZeroPoint error:&error];
+    Assert(unknown != nil && error == nil,
+        @"generic landmark value does not own method allowlists");
+    Assert([NamedLandmarkSnapshot snapshotWithMethod:method imageContext:context
+        landmarks:@[a, unknown] error:&error] == nil && error != nil,
+        @"method evaluator allowlist rejects unknown landmark identifier");
     for (NSValue *value in @[
         [NSValue valueWithPoint:NSMakePoint(NAN, 1)],
         [NSValue valueWithPoint:NSMakePoint(1, INFINITY)],
@@ -215,6 +220,62 @@ static void TestResultValidation(void)
     Assert([MeasurementDomainSnapshot snapshotWithLandmarks:landmarks result:mismatch
         error:&error] == nil && error != nil,
         @"raw result cannot diverge from actual endpoint input");
+    Assert([error.domain isEqualToString:MedisaleMeasurementDomainErrorDomain],
+        @"method evaluator failure propagates through generic snapshot");
+}
+
+static void TestMethodEvaluatorBoundary(void)
+{
+    MeasurementMethodDefinition *method =
+        [MeasurementMethodDefinition legacyImageDistanceV1];
+    Assert(method.evaluator != nil, @"method definition owns a pure evaluator");
+    Assert(method.evaluator.measurementKind == method.kind &&
+        method.evaluator.methodVersion == method.version,
+        @"evaluator and method identities agree");
+    Assert([method.stableKindCode isEqualToString:@"legacy-image-distance"],
+        @"stable kind code is provided by evaluator registration");
+    Assert([[method stableCodeForLandmarkIdentifier:
+        MedisaleLandmarkIdentifierEndpointA] isEqualToString:@"endpoint-a"],
+        @"evaluator owns landmark serialization code");
+    Assert([method landmarkIdentifierForStableCode:@"endpoint-b"] ==
+        MedisaleLandmarkIdentifierEndpointB,
+        @"evaluator owns landmark decoding code");
+    Assert([method landmarkIdentifierForStableCode:@"unknown"] == 0,
+        @"unknown landmark code fails closed");
+
+    NSError *error = nil;
+    MeasurementMethodDefinition *decoded = [MeasurementMethodDefinition
+        definitionForStableKindCode:method.stableKindCode
+        stableMethodIdentifier:method.stableIdentifier version:method.version
+        error:&error];
+    Assert(decoded != nil && error == nil, @"registered stable method decodes");
+    Assert(decoded.evaluator != nil && decoded.resultUnit == method.resultUnit,
+        @"decoded method retains evaluator contract");
+    error = nil;
+    Assert([MeasurementMethodDefinition definitionForStableKindCode:@"unknown"
+        stableMethodIdentifier:method.stableIdentifier version:method.version
+        error:&error] == nil && error != nil,
+        @"unknown stable method fails closed");
+
+    NSArray<NSArray<NSNumber *> *> *knownValues = @[
+        @[@(13.25), @(24.5), @(3.0), @(4.0)],
+        @[@(10.25), @(25.5), @(0.0), @(5.0)],
+        @[@(18.25), @(20.5), @(8.0), @(0.0)],
+        @[@(16.25), @(28.5), @(6.0), @(8.0)],
+        @[@(22.25), @(25.5), @(12.0), @(5.0)],
+        @[@(19.25), @(32.5), @(9.0), @(12.0)],
+        @[@(34.25), @(41.5), @(24.0), @(21.0)],
+        @[@(25.25), @(55.5), @(15.0), @(35.0)],
+    ];
+    for (NSArray<NSNumber *> *values in knownValues) {
+        double bx = values[0].doubleValue;
+        double by = values[1].doubleValue;
+        double dx = values[2].doubleValue;
+        double dy = values[3].doubleValue;
+        MeasurementDomainSnapshot *snapshot = Snapshot(bx, by);
+        Assert(snapshot.result.rawValue == hypot(dx, dy),
+            @"legacy evaluator accepts a known image-distance value");
+    }
 }
 
 static void TestDTO(void)
@@ -253,6 +314,9 @@ static void TestDTO(void)
     bad = MutableDTO();
     bad[@"domain"][@"method"][@"version"] = @2;
     RejectDTO(bad, @"future method version rejected");
+    bad = MutableDTO();
+    bad[@"domain"][@"result"][@"methodVersion"] = @2;
+    RejectDTO(bad, @"result and landmark method-version mismatch rejected");
     bad = MutableDTO();
     bad[@"domain"][@"method"][@"kind"] = @"unknown-kind";
     RejectDTO(bad, @"unknown measurement kind rejected");
@@ -348,75 +412,15 @@ static void TestLegacyCompatibility(void)
         error != nil, @"future legacy schema fails closed without upgrade");
 }
 
-static void TestCalibrationAndConfirmationAssociation(void)
-{
-    NSError *error = nil;
-    MeasurementCalibrationReference *unknown = [MeasurementCalibrationReference
-        referenceWithState:MedisaleMeasurementCalibrationStateUnknown
-        provenance:MedisaleMeasurementCalibrationProvenanceNone schemaVersion:1
-        methodVersion:1 rowSpacing:NAN columnSpacing:NAN error:&error];
-    Assert(unknown != nil && error == nil, @"unknown calibration is explicit and valid");
-    MeasurementCalibrationReference *runtime = [MeasurementCalibrationReference
-        referenceWithState:MedisaleMeasurementCalibrationStateRuntimeSpacingUncalibrated
-        provenance:MedisaleMeasurementCalibrationProvenanceHorosRuntimeSpacing
-        schemaVersion:1 methodVersion:1 rowSpacing:0.4 columnSpacing:0.2 error:&error];
-    Assert(runtime != nil && error == nil, @"runtime spacing remains uncalibrated");
-    MeasurementCalibrationReference *explicitCalibration = [MeasurementCalibrationReference
-        referenceWithState:MedisaleMeasurementCalibrationStateExplicit
-        provenance:MedisaleMeasurementCalibrationProvenanceExplicit schemaVersion:1
-        methodVersion:1 rowSpacing:0.3 columnSpacing:0.3 error:&error];
-    Assert(explicitCalibration != nil && error == nil,
-        @"explicit calibration provenance accepted");
-
-    error = nil;
-    Assert([MeasurementCalibrationReference
-        referenceWithState:MedisaleMeasurementCalibrationStateRuntimeSpacingUncalibrated
-        provenance:MedisaleMeasurementCalibrationProvenanceExplicit schemaVersion:1
-        methodVersion:1 rowSpacing:0.4 columnSpacing:0.2 error:&error] == nil &&
-        error != nil, @"calibration state and provenance mismatch rejected");
-    error = nil;
-    Assert([MeasurementCalibrationReference
-        referenceWithState:MedisaleMeasurementCalibrationStateExplicit
-        provenance:MedisaleMeasurementCalibrationProvenanceExplicit schemaVersion:2
-        methodVersion:1 rowSpacing:0.3 columnSpacing:0.3 error:&error] == nil &&
-        error != nil, @"future calibration schema rejected");
-    error = nil;
-    Assert([MeasurementCalibrationReference
-        referenceWithState:MedisaleMeasurementCalibrationStateExplicit
-        provenance:MedisaleMeasurementCalibrationProvenanceExplicit schemaVersion:1
-        methodVersion:2 rowSpacing:0.3 columnSpacing:0.3 error:&error] == nil &&
-        error != nil, @"future calibration method rejected");
-
-    MeasurementReviewAssociation *first = [MeasurementReviewAssociation
-        associationWithSnapshot:Snapshot(70, 90) calibration:unknown error:&error];
-    MeasurementReviewAssociation *same = [MeasurementReviewAssociation
-        associationWithSnapshot:Snapshot(70, 90) calibration:unknown error:&error];
-    Assert([first hasSameInputsAsAssociation:same],
-        @"same domain and calibration inputs retain confirmation fingerprint");
-    Assert(first.inputFingerprint.length == 16 &&
-        [first.inputFingerprint rangeOfString:@"synthetic"].location == NSNotFound,
-        @"public confirmation fingerprint is opaque and contains no image identity");
-    MeasurementReviewAssociation *endpointChanged = [MeasurementReviewAssociation
-        associationWithSnapshot:Snapshot(71, 90) calibration:unknown error:&error];
-    Assert(![first hasSameInputsAsAssociation:endpointChanged],
-        @"real endpoint and result change invalidates confirmation fingerprint");
-    MeasurementReviewAssociation *calibrationChanged = [MeasurementReviewAssociation
-        associationWithSnapshot:Snapshot(70, 90) calibration:runtime error:&error];
-    Assert(![first hasSameInputsAsAssociation:calibrationChanged],
-        @"real calibration change invalidates confirmation fingerprint");
-    Assert(first.snapshot.result.rawValue == same.snapshot.result.rawValue,
-        @"confirmation comparison never fabricates a raw numeric change");
-}
-
 int main(void)
 {
     @autoreleasepool {
         TestMethodAndContextValidation();
         TestNamedLandmarks();
         TestResultValidation();
+        TestMethodEvaluatorBoundary();
         TestDTO();
         TestLegacyCompatibility();
-        TestCalibrationAndConfirmationAssociation();
         NSLog(@"PASS: %lu measurement domain assertions", (unsigned long)assertionCount);
     }
     return 0;

@@ -220,9 +220,6 @@ static BOOL MedisaleRecordIsValid(MeasurementRecord *record)
         record.endpointBX >= 0.0 && record.endpointBY >= 0.0 &&
         record.endpointAX < context.pixelWidth && record.endpointBX < context.pixelWidth &&
         record.endpointAY < context.pixelHeight && record.endpointBY < context.pixelHeight &&
-        fabs(record.pixelDistance - hypot(record.endpointBX - record.endpointAX,
-                                          record.endpointBY - record.endpointAY)) <= 0.000001 *
-            MAX(1.0, record.pixelDistance) &&
         record.schemaVersion == MedisaleMeasurementSchemaVersion &&
         record.createdAt != nil && record.updatedAt != nil &&
         [record.updatedAt compare:record.createdAt] != NSOrderedAscending;

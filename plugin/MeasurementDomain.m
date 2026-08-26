@@ -14,7 +14,6 @@ typedef NS_ENUM(NSInteger, MedisaleMeasurementDomainErrorCode) {
     MedisaleMeasurementDomainErrorInvalidContext,
     MedisaleMeasurementDomainErrorInvalidLandmarks,
     MedisaleMeasurementDomainErrorInvalidResult,
-    MedisaleMeasurementDomainErrorInvalidCalibration,
 };
 
 static void MedisaleDomainSetError(NSError **error,
@@ -56,29 +55,93 @@ static BOOL MedisalePointIsInsideContext(NSPoint point,
         point.x < context.pixelWidth && point.y < context.pixelHeight;
 }
 
+@interface LegacyDistanceV1Evaluator : NSObject <MeasurementMethodEvaluating>
+@end
+
+@implementation LegacyDistanceV1Evaluator
+- (MedisaleMeasurementKind)measurementKind
+{
+    return MedisaleMeasurementKindLegacyImageDistance;
+}
+- (NSString *)stableKindCode { return @"legacy-image-distance"; }
+- (NSString *)stableMethodIdentifier { return @"image-distance"; }
+- (NSInteger)methodVersion { return MedisaleLegacyDistanceMethodVersion; }
+- (NSArray<NSNumber *> *)requiredLandmarkIdentifiers
+{
+    return @[@(MedisaleLandmarkIdentifierEndpointA),
+             @(MedisaleLandmarkIdentifierEndpointB)];
+}
+- (MedisaleMeasurementUnit)resultUnit { return MedisaleMeasurementUnitPixels; }
+
+- (NSString *)stableCodeForLandmarkIdentifier:(MedisaleLandmarkIdentifier)identifier
+{
+    if (identifier == MedisaleLandmarkIdentifierEndpointA) return @"endpoint-a";
+    if (identifier == MedisaleLandmarkIdentifierEndpointB) return @"endpoint-b";
+    return nil;
+}
+
+- (MedisaleLandmarkIdentifier)landmarkIdentifierForStableCode:(NSString *)stableCode
+{
+    if ([stableCode isEqualToString:@"endpoint-a"])
+        return MedisaleLandmarkIdentifierEndpointA;
+    if ([stableCode isEqualToString:@"endpoint-b"])
+        return MedisaleLandmarkIdentifierEndpointB;
+    return 0;
+}
+
+- (BOOL)validateLandmarkSnapshot:(NamedLandmarkSnapshot *)landmarks
+                          result:(VersionedMeasurementResult *)result
+                           error:(NSError **)error
+{
+    NamedImageLandmark *a = [landmarks
+        landmarkForIdentifier:MedisaleLandmarkIdentifierEndpointA];
+    NamedImageLandmark *b = [landmarks
+        landmarkForIdentifier:MedisaleLandmarkIdentifierEndpointB];
+    if (a == nil || b == nil) {
+        MedisaleDomainSetError(error, MedisaleMeasurementDomainErrorInvalidResult,
+            @"The required result landmarks are missing.");
+        return NO;
+    }
+    double expected = hypot(b.imagePoint.x - a.imagePoint.x,
+                            b.imagePoint.y - a.imagePoint.y);
+    double tolerance = DBL_EPSILON * fmax(1.0, expected) * 8.0;
+    if (fabs(result.rawValue - expected) > tolerance) {
+        MedisaleDomainSetError(error, MedisaleMeasurementDomainErrorInvalidResult,
+            @"The method evaluator rejected the raw result.");
+        return NO;
+    }
+    return YES;
+}
+@end
+
+static NSArray<id<MeasurementMethodEvaluating>> *MedisaleRegisteredEvaluators(void)
+{
+    static NSArray<id<MeasurementMethodEvaluating>> *evaluators;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        evaluators = @[[[LegacyDistanceV1Evaluator alloc] init]];
+    });
+    return evaluators;
+}
+
 @interface MeasurementMethodDefinition ()
-- (instancetype)initWithKind:(MedisaleMeasurementKind)kind
-             stableIdentifier:(NSString *)stableIdentifier
-                       version:(NSInteger)version
-   requiredLandmarkIdentifiers:(NSArray<NSNumber *> *)requiredLandmarkIdentifiers
-                    resultUnit:(MedisaleMeasurementUnit)resultUnit;
+- (instancetype)initWithEvaluator:(id<MeasurementMethodEvaluating>)evaluator;
 @end
 
 @implementation MeasurementMethodDefinition
 
-- (instancetype)initWithKind:(MedisaleMeasurementKind)kind
-             stableIdentifier:(NSString *)stableIdentifier
-                       version:(NSInteger)version
-   requiredLandmarkIdentifiers:(NSArray<NSNumber *> *)requiredLandmarkIdentifiers
-                    resultUnit:(MedisaleMeasurementUnit)resultUnit
+- (instancetype)initWithEvaluator:(id<MeasurementMethodEvaluating>)evaluator
 {
     self = [super init];
     if (self) {
-        _kind = kind;
-        _stableIdentifier = [stableIdentifier copy];
-        _version = version;
-        _requiredLandmarkIdentifiers = [requiredLandmarkIdentifiers copy];
-        _resultUnit = resultUnit;
+        _evaluator = evaluator;
+        _kind = evaluator.measurementKind;
+        _stableKindCode = [evaluator.stableKindCode copy];
+        _stableIdentifier = [evaluator.stableMethodIdentifier copy];
+        _version = evaluator.methodVersion;
+        _requiredLandmarkIdentifiers =
+            [evaluator.requiredLandmarkIdentifiers copy];
+        _resultUnit = evaluator.resultUnit;
     }
     return self;
 }
@@ -88,14 +151,15 @@ static BOOL MedisalePointIsInsideContext(NSPoint point,
     static MeasurementMethodDefinition *definition;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        definition = [[self alloc]
-            initWithKind:MedisaleMeasurementKindLegacyImageDistance
-            stableIdentifier:@"image-distance"
-            version:MedisaleLegacyDistanceMethodVersion
-            requiredLandmarkIdentifiers:@[
-                @(MedisaleLandmarkIdentifierEndpointA),
-                @(MedisaleLandmarkIdentifierEndpointB)]
-            resultUnit:MedisaleMeasurementUnitPixels];
+        for (id<MeasurementMethodEvaluating> evaluator in
+                MedisaleRegisteredEvaluators()) {
+            if (evaluator.measurementKind ==
+                    MedisaleMeasurementKindLegacyImageDistance &&
+                evaluator.methodVersion == MedisaleLegacyDistanceMethodVersion) {
+                definition = [[self alloc] initWithEvaluator:evaluator];
+                break;
+            }
+        }
     });
     return definition;
 }
@@ -104,13 +168,41 @@ static BOOL MedisalePointIsInsideContext(NSPoint point,
                            version:(NSInteger)version
                              error:(NSError **)error
 {
-    if (kind == MedisaleMeasurementKindLegacyImageDistance &&
-        version == MedisaleLegacyDistanceMethodVersion) {
-        return [self legacyImageDistanceV1];
+    for (id<MeasurementMethodEvaluating> evaluator in MedisaleRegisteredEvaluators()) {
+        if (evaluator.measurementKind == kind && evaluator.methodVersion == version) {
+            return [[self alloc] initWithEvaluator:evaluator];
+        }
     }
     MedisaleDomainSetError(error, MedisaleMeasurementDomainErrorUnsupportedVersion,
         @"The measurement method or version is unsupported.");
     return nil;
+}
+
++ (instancetype)definitionForStableKindCode:(NSString *)stableKindCode
+                      stableMethodIdentifier:(NSString *)stableMethodIdentifier
+                                     version:(NSInteger)version
+                                       error:(NSError **)error
+{
+    for (id<MeasurementMethodEvaluating> evaluator in MedisaleRegisteredEvaluators()) {
+        if ([evaluator.stableKindCode isEqualToString:stableKindCode] &&
+            [evaluator.stableMethodIdentifier isEqualToString:stableMethodIdentifier] &&
+            evaluator.methodVersion == version) {
+            return [[self alloc] initWithEvaluator:evaluator];
+        }
+    }
+    MedisaleDomainSetError(error, MedisaleMeasurementDomainErrorUnsupportedVersion,
+        @"The stable measurement method identity is unsupported.");
+    return nil;
+}
+
+- (NSString *)stableCodeForLandmarkIdentifier:(MedisaleLandmarkIdentifier)identifier
+{
+    return [self.evaluator stableCodeForLandmarkIdentifier:identifier];
+}
+
+- (MedisaleLandmarkIdentifier)landmarkIdentifierForStableCode:(NSString *)stableCode
+{
+    return [self.evaluator landmarkIdentifierForStableCode:stableCode];
 }
 
 - (id)copyWithZone:(NSZone *)zone { return self; }
@@ -183,9 +275,7 @@ static BOOL MedisalePointIsInsideContext(NSPoint point,
                               imagePoint:(NSPoint)imagePoint
                                    error:(NSError **)error
 {
-    if ((identifier != MedisaleLandmarkIdentifierEndpointA &&
-         identifier != MedisaleLandmarkIdentifierEndpointB) ||
-        !MedisalePointIsFinite(imagePoint)) {
+    if (identifier <= 0 || !MedisalePointIsFinite(imagePoint)) {
         MedisaleDomainSetError(error, MedisaleMeasurementDomainErrorInvalidLandmarks,
             @"The landmark identifier or coordinate is invalid.");
         return nil;
@@ -357,167 +447,18 @@ static BOOL MedisalePointIsInsideContext(NSPoint point,
 {
     if (landmarks == nil || result == nil ||
         landmarks.method.kind != result.method.kind ||
-        landmarks.method.version != result.method.version) {
+        landmarks.method.version != result.method.version ||
+        ![landmarks.method.stableIdentifier
+            isEqualToString:result.method.stableIdentifier]) {
         MedisaleDomainSetError(error, MedisaleMeasurementDomainErrorInvalidResult,
             @"The landmark and result method identities do not match.");
         return nil;
     }
-    NamedImageLandmark *a = [landmarks
-        landmarkForIdentifier:MedisaleLandmarkIdentifierEndpointA];
-    NamedImageLandmark *b = [landmarks
-        landmarkForIdentifier:MedisaleLandmarkIdentifierEndpointB];
-    if (a == nil || b == nil) {
-        MedisaleDomainSetError(error, MedisaleMeasurementDomainErrorInvalidResult,
-            @"The required result landmarks are missing.");
-        return nil;
-    }
-    double expected = hypot(b.imagePoint.x - a.imagePoint.x,
-                            b.imagePoint.y - a.imagePoint.y);
-    double tolerance = DBL_EPSILON * fmax(1.0, expected) * 8.0;
-    if (fabs(result.rawValue - expected) > tolerance) {
-        MedisaleDomainSetError(error, MedisaleMeasurementDomainErrorInvalidResult,
-            @"The raw result does not match its named landmark inputs.");
+    if (![landmarks.method.evaluator validateLandmarkSnapshot:landmarks
+        result:result error:error]) {
         return nil;
     }
     return [[self alloc] initWithLandmarks:landmarks result:result];
-}
-
-- (id)copyWithZone:(NSZone *)zone { return self; }
-@end
-
-@interface MeasurementCalibrationReference ()
-- (instancetype)initWithState:(MedisaleMeasurementCalibrationState)state
-                    provenance:(MedisaleMeasurementCalibrationProvenance)provenance
-                 schemaVersion:(NSInteger)schemaVersion
-                 methodVersion:(NSInteger)methodVersion
-                    rowSpacing:(double)rowSpacing
-                 columnSpacing:(double)columnSpacing;
-@end
-
-@implementation MeasurementCalibrationReference
-- (instancetype)initWithState:(MedisaleMeasurementCalibrationState)state
-                    provenance:(MedisaleMeasurementCalibrationProvenance)provenance
-                 schemaVersion:(NSInteger)schemaVersion
-                 methodVersion:(NSInteger)methodVersion
-                    rowSpacing:(double)rowSpacing
-                 columnSpacing:(double)columnSpacing
-{
-    self = [super init];
-    if (self) {
-        _state = state;
-        _provenance = provenance;
-        _schemaVersion = schemaVersion;
-        _methodVersion = methodVersion;
-        _rowSpacing = rowSpacing;
-        _columnSpacing = columnSpacing;
-    }
-    return self;
-}
-
-+ (instancetype)referenceWithState:(MedisaleMeasurementCalibrationState)state
-                          provenance:(MedisaleMeasurementCalibrationProvenance)provenance
-                       schemaVersion:(NSInteger)schemaVersion
-                       methodVersion:(NSInteger)methodVersion
-                          rowSpacing:(double)rowSpacing
-                       columnSpacing:(double)columnSpacing
-                               error:(NSError **)error
-{
-    BOOL valid = schemaVersion == 1 && methodVersion == 1;
-    if (state == MedisaleMeasurementCalibrationStateUnknown) {
-        valid = valid && provenance == MedisaleMeasurementCalibrationProvenanceNone &&
-            isnan(rowSpacing) && isnan(columnSpacing);
-    } else if (state == MedisaleMeasurementCalibrationStateRuntimeSpacingUncalibrated) {
-        valid = valid && provenance ==
-            MedisaleMeasurementCalibrationProvenanceHorosRuntimeSpacing &&
-            isfinite(rowSpacing) && rowSpacing > 0.0 &&
-            isfinite(columnSpacing) && columnSpacing > 0.0;
-    } else if (state == MedisaleMeasurementCalibrationStateExplicit) {
-        valid = valid && provenance == MedisaleMeasurementCalibrationProvenanceExplicit &&
-            isfinite(rowSpacing) && rowSpacing > 0.0 &&
-            isfinite(columnSpacing) && columnSpacing > 0.0;
-    } else {
-        valid = NO;
-    }
-    if (!valid) {
-        MedisaleDomainSetError(error, MedisaleMeasurementDomainErrorInvalidCalibration,
-            @"The calibration state, provenance, or version is inconsistent.");
-        return nil;
-    }
-    return [[self alloc] initWithState:state provenance:provenance
-        schemaVersion:schemaVersion methodVersion:methodVersion
-        rowSpacing:rowSpacing columnSpacing:columnSpacing];
-}
-
-- (id)copyWithZone:(NSZone *)zone { return self; }
-@end
-
-@interface MeasurementReviewAssociation ()
-@property(nonatomic, copy) NSData *canonicalInputData;
-- (instancetype)initWithSnapshot:(MeasurementDomainSnapshot *)snapshot
-                       calibration:(MeasurementCalibrationReference *)calibration
-                  canonicalInputData:(NSData *)canonicalInputData
-                         fingerprint:(NSString *)fingerprint;
-@end
-
-
-@implementation MeasurementReviewAssociation
-+ (instancetype)associationWithSnapshot:(MeasurementDomainSnapshot *)snapshot
-                             calibration:(MeasurementCalibrationReference *)calibration
-                                   error:(NSError **)error
-{
-    if (snapshot == nil || calibration == nil) {
-        MedisaleDomainSetError(error, MedisaleMeasurementDomainErrorInvalidCalibration,
-            @"The review inputs are incomplete.");
-        return nil;
-    }
-    MeasurementImageContext *context = snapshot.landmarkSnapshot.imageContext;
-    NSMutableString *fingerprint = [NSMutableString stringWithFormat:
-        @"%ld|%ld|%@|%@|%@|%ld|%ld|%ld",
-        (long)snapshot.landmarkSnapshot.method.kind,
-        (long)snapshot.landmarkSnapshot.method.version,
-        context.studyInstanceUID, context.seriesInstanceUID, context.sopInstanceUID,
-        (long)context.frameNumber, (long)context.pixelWidth, (long)context.pixelHeight];
-    for (NamedImageLandmark *landmark in snapshot.landmarkSnapshot.landmarks) {
-        [fingerprint appendFormat:@"|%ld|%a|%a", (long)landmark.identifier,
-            landmark.imagePoint.x, landmark.imagePoint.y];
-    }
-    [fingerprint appendFormat:@"|%a|%ld|%ld|%ld|%ld|%a|%a",
-        snapshot.result.rawValue, (long)calibration.state,
-        (long)calibration.provenance, (long)calibration.schemaVersion,
-        (long)calibration.methodVersion, calibration.rowSpacing,
-        calibration.columnSpacing];
-    NSData *canonicalInputData = [fingerprint dataUsingEncoding:NSUTF8StringEncoding];
-    const uint8_t *bytes = canonicalInputData.bytes;
-    uint64_t hash = UINT64_C(1469598103934665603);
-    for (NSUInteger index = 0; index < canonicalInputData.length; index++) {
-        hash ^= bytes[index];
-        hash *= UINT64_C(1099511628211);
-    }
-    NSString *opaqueFingerprint = [NSString stringWithFormat:@"%016llx",
-        (unsigned long long)hash];
-    return [[self alloc] initWithSnapshot:snapshot calibration:calibration
-        canonicalInputData:canonicalInputData fingerprint:opaqueFingerprint];
-}
-
-- (instancetype)initWithSnapshot:(MeasurementDomainSnapshot *)snapshot
-                       calibration:(MeasurementCalibrationReference *)calibration
-                  canonicalInputData:(NSData *)canonicalInputData
-                         fingerprint:(NSString *)fingerprint
-{
-    self = [super init];
-    if (self) {
-        _snapshot = [snapshot copy];
-        _calibration = [calibration copy];
-        _canonicalInputData = [canonicalInputData copy];
-        _inputFingerprint = [fingerprint copy];
-    }
-    return self;
-}
-
-- (BOOL)hasSameInputsAsAssociation:(MeasurementReviewAssociation *)other
-{
-    return other != nil &&
-        [self.canonicalInputData isEqualToData:other.canonicalInputData];
 }
 
 - (id)copyWithZone:(NSZone *)zone { return self; }
