@@ -226,6 +226,35 @@ static void VerifyFailure(SQLiteMeasurementStore *store,
           @"a normal save must succeed after failure");
 }
 
+static void VerifyFailedFirstSave(NSURL *workspace,
+                                  MeasurementRecord *attempt,
+                                  MedisaleSQLiteFailureInjection injection)
+{
+    NSURL *root = [[workspace URLByAppendingPathComponent:@"build" isDirectory:YES]
+        URLByAppendingPathComponent:[@"p1-11-first-save-"
+            stringByAppendingString:NSUUID.UUID.UUIDString]
+                     isDirectory:YES];
+    NSURL *databaseURL = [[root URLByAppendingPathComponent:@"store" isDirectory:YES]
+        URLByAppendingPathComponent:@"measurements.sqlite3" isDirectory:NO];
+    NSError *error = nil;
+    SQLiteMeasurementStore *store = [[SQLiteMeasurementStore alloc]
+        initWithDatabaseURL:databaseURL error:&error];
+    Check(store != nil && error == nil, @"failed-first-save store object must initialize");
+    Check(![NSFileManager.defaultManager fileExistsAtPath:root.path],
+          @"failed-first-save initialization must not create a directory");
+    store.failureInjection = injection;
+    error = nil;
+    Check(![store saveMeasurement:attempt error:&error] && error != nil,
+          @"injected first save must fail");
+    Check(![NSFileManager.defaultManager fileExistsAtPath:databaseURL.path],
+          @"failed first save must leave no database file");
+    Check(![NSFileManager.defaultManager fileExistsAtPath:
+              databaseURL.URLByDeletingLastPathComponent.path],
+          @"failed first save must leave no database directory");
+    Check(![NSFileManager.defaultManager fileExistsAtPath:root.path],
+          @"failed first save must leave no partial artifact root");
+}
+
 int main(void)
 {
     @autoreleasepool {
@@ -252,6 +281,43 @@ int main(void)
             stringByAppendingString:@"/"];
         Check([store.databaseURL.path.stringByStandardizingPath hasPrefix:homePrefix],
               @"database must remain inside the user home");
+        Check(![NSFileManager.defaultManager fileExistsAtPath:temporaryRoot.path],
+              @"store object initialization must not create filesystem state");
+
+        ImageContext *absentContext = Context(0);
+        error = nil;
+        Check([store latestMeasurementForImageContext:absentContext error:&error] == nil &&
+              error == nil, @"restore from an absent store must return no record");
+        Check(![NSFileManager.defaultManager fileExistsAtPath:temporaryRoot.path],
+              @"absent-store restore must not create filesystem state");
+
+        NSDate *created = [NSDate dateWithTimeIntervalSince1970:1000.0];
+        NSString *firstID = NSUUID.UUID.UUIDString;
+        ImageContext *firstContext = Context(0);
+        MeasurementRecord *first = Record(firstID, firstContext,
+                                          10.25, 20.5, 45.75, 60.125,
+                                          created, created);
+        ImageContext *invalidFirstContext = Context(-1);
+        MeasurementRecord *invalidFirst = Record(NSUUID.UUID.UUIDString,
+            invalidFirstContext, 1.0, 2.0, 3.0, 4.0, created, created);
+        error = nil;
+        Check(![store saveMeasurement:invalidFirst error:&error] && error != nil,
+              @"invalid unconfirmed first save must fail before creation");
+        Check(![NSFileManager.defaultManager fileExistsAtPath:temporaryRoot.path],
+              @"invalid unconfirmed first save must leave no artifact");
+
+        for (NSNumber *injection in @[
+            @(MedisaleSQLiteFailureInjectionConstraint),
+            @(MedisaleSQLiteFailureInjectionStatement),
+            @(MedisaleSQLiteFailureInjectionBeforeCommit),
+            @(MedisaleSQLiteFailureInjectionInterruptedSave),
+        ]) {
+            VerifyFailedFirstSave(workspace, first, injection.integerValue);
+        }
+
+        error = nil;
+        Check([store saveMeasurement:first error:&error],
+              @"confirmed initial save must create and commit the store");
         struct stat databaseStatus;
         struct stat parentStatus;
         Check(lstat(store.databaseURL.fileSystemRepresentation, &databaseStatus) == 0 &&
@@ -266,14 +332,6 @@ int main(void)
         Check(UserVersion(store.databaseURL) == MedisaleMeasurementSchemaVersion,
               @"schema version must be explicit");
         Check(IntegrityPasses(store.databaseURL), @"new database integrity must pass");
-
-        NSDate *created = [NSDate dateWithTimeIntervalSince1970:1000.0];
-        NSString *firstID = NSUUID.UUID.UUIDString;
-        ImageContext *firstContext = Context(0);
-        MeasurementRecord *first = Record(firstID, firstContext,
-                                          10.25, 20.5, 45.75, 60.125,
-                                          created, created);
-        Check([store saveMeasurement:first error:&error], @"initial save must succeed");
         Check(RecordCount(store.databaseURL) == 1, @"initial save must commit one record");
         NSDictionary *firstRow = ReadRecord(store.databaseURL, firstID);
         Check([firstRow[@"study"] isEqual:firstContext.studyInstanceUID] &&
@@ -296,6 +354,17 @@ int main(void)
               fabs(restoredFirst.endpointAX - first.endpointAX) < 0.000001 &&
               fabs(restoredFirst.endpointBY - first.endpointBY) < 0.000001,
               @"restored identifier and image coordinates must match");
+
+        NSURL *storeDirectory = store.databaseURL.URLByDeletingLastPathComponent;
+        NSArray<NSString *> *filesBeforeRead = [[NSFileManager defaultManager]
+            contentsOfDirectoryAtPath:storeDirectory.path error:nil];
+        error = nil;
+        Check([store latestMeasurementForImageContext:firstContext error:&error] != nil &&
+              error == nil, @"existing store read must succeed read-only");
+        NSArray<NSString *> *filesAfterRead = [[NSFileManager defaultManager]
+            contentsOfDirectoryAtPath:storeDirectory.path error:nil];
+        Check([filesBeforeRead isEqualToArray:filesAfterRead],
+              @"existing store read must create no new file");
 
         ImageContext *wrongFrame = ContextWithFrame(firstContext, 1);
         error = nil;

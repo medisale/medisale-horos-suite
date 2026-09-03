@@ -3,21 +3,17 @@
 #import "HorosAdapter.h"
 #import "HoldSpacePanState.h"
 #import "ImageContext.h"
+#import "LegacyDistanceInteractionAdapter.h"
 #import "LineOverlayModel.h"
+#import "MeasurementInteraction.h"
 #import <DCMView.h>
 #import <Notifications.h>
 #import <ViewerController.h>
 
-typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
-    MedisaleEndpointNone = 0,
-    MedisaleEndpointA,
-    MedisaleEndpointB,
-};
-
 @interface MedisaleLineOverlayView : NSView
 @property(nonatomic, weak) DCMView *imageView;
-@property(nonatomic, strong) LineOverlayModel *model;
-@property(nonatomic) MedisaleEndpoint selectedEndpoint;
+@property(nonatomic, strong) LineOverlayModel *legacyModel;
+@property(nonatomic, strong) MeasurementInteractionSession *session;
 @end
 
 @implementation MedisaleLineOverlayView
@@ -42,34 +38,37 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
 {
     (void)dirtyRect;
     DCMView *imageView = self.imageView;
-    LineOverlayModel *model = self.model;
-    if (imageView == nil || model == nil) {
+    MeasurementInteractionSession *session = self.session;
+    if (imageView == nil || session == nil) {
         return;
     }
-
-    NSPoint a = [imageView ConvertFromGL2NSView:model.pointA];
-    NSPoint b = [imageView ConvertFromGL2NSView:model.pointB];
-
-    NSBezierPath *outline = [NSBezierPath bezierPath];
-    [outline moveToPoint:a];
-    [outline lineToPoint:b];
-    outline.lineWidth = 5.0;
-    outline.lineCapStyle = NSLineCapStyleRound;
-    [[NSColor colorWithCalibratedWhite:0.0 alpha:0.85] setStroke];
-    [outline stroke];
-
-    NSBezierPath *line = [NSBezierPath bezierPath];
-    [line moveToPoint:a];
-    [line lineToPoint:b];
-    line.lineWidth = 2.5;
-    line.lineCapStyle = NSLineCapStyleRound;
-    [[NSColor colorWithCalibratedRed:0.0 green:0.95 blue:1.0 alpha:1.0] setStroke];
-    [line stroke];
-
-    NSArray<NSValue *> *points = @[[NSValue valueWithPoint:a], [NSValue valueWithPoint:b]];
-    for (NSUInteger index = 0; index < points.count; index++) {
-        NSValue *value = points[index];
-        NSPoint point = value.pointValue;
+    NSMutableDictionary<NSNumber *, NSValue *> *displayPoints =
+        [NSMutableDictionary dictionary];
+    for (NamedImageLandmark *landmark in session.landmarks) {
+        displayPoints[@(landmark.identifier)] = [NSValue valueWithPoint:
+            [imageView ConvertFromGL2NSView:landmark.imagePoint]];
+    }
+    for (MeasurementOverlaySegment *segment in session.definition.overlaySegments) {
+        NSValue *start = displayPoints[@(segment.startIdentifier)];
+        NSValue *end = displayPoints[@(segment.endIdentifier)];
+        if (start == nil || end == nil) continue;
+        for (NSNumber *width in @[@5.0, @2.5]) {
+            NSBezierPath *path = [NSBezierPath bezierPath];
+            [path moveToPoint:start.pointValue];
+            [path lineToPoint:end.pointValue];
+            path.lineWidth = width.doubleValue;
+            path.lineCapStyle = NSLineCapStyleRound;
+            if (width.doubleValue > 3.0) {
+                [[NSColor colorWithCalibratedWhite:0.0 alpha:0.85] setStroke];
+            } else {
+                [[NSColor colorWithCalibratedRed:0.0 green:0.95 blue:1.0 alpha:1.0]
+                    setStroke];
+            }
+            [path stroke];
+        }
+    }
+    for (NSNumber *identifier in session.definition.collectionOrder) {
+        NSPoint point = displayPoints[identifier].pointValue;
         NSRect markerRect = NSMakeRect(point.x - 4.0, point.y - 4.0, 8.0, 8.0);
         NSBezierPath *marker = [NSBezierPath bezierPathWithOvalInRect:markerRect];
         [[NSColor colorWithCalibratedRed:0.0 green:0.95 blue:1.0 alpha:1.0] setFill];
@@ -78,8 +77,7 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
         marker.lineWidth = 1.0;
         [marker stroke];
 
-        MedisaleEndpoint endpoint = index == 0 ? MedisaleEndpointA : MedisaleEndpointB;
-        if (self.selectedEndpoint == endpoint) {
+        if (session.selectedLandmarkIdentifier == identifier.integerValue) {
             NSRect selectionRect = NSMakeRect(point.x - 8.0, point.y - 8.0, 16.0, 16.0);
             NSBezierPath *selection = [NSBezierPath bezierPathWithOvalInRect:selectionRect];
             selection.lineWidth = 3.0;
@@ -88,6 +86,11 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
         }
     }
 
+    LineOverlayModel *model = self.legacyModel;
+    if (model == nil || session.definition.overlaySegments.count == 0) return;
+    MeasurementOverlaySegment *labelSegment = session.definition.overlaySegments.firstObject;
+    NSPoint a = displayPoints[@(labelSegment.startIdentifier)].pointValue;
+    NSPoint b = displayPoints[@(labelSegment.endIdentifier)].pointValue;
     NSPoint midpoint = NSMakePoint((a.x + b.x) * 0.5, (a.y + b.y) * 0.5);
     NSString *distance = [NSString stringWithFormat:
         @"A %.2f, %.2f   B %.2f, %.2f   |   %.2f px",
@@ -115,10 +118,9 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
 @property(nonatomic, strong) id eventMonitor;
 @property(nonatomic, copy) MedisaleOverlayInvalidation invalidation;
 @property(nonatomic) BOOL originalPostsFrameChangedNotifications;
-@property(nonatomic) MedisaleEndpoint selectedEndpoint;
-@property(nonatomic) BOOL draggingEndpoint;
-@property(nonatomic) NSPoint dragOrigin;
 @property(nonatomic, weak) HoldSpacePanState *panState;
+@property(nonatomic, strong) MeasurementInteractionSession *session;
+@property(nonatomic, copy) NSString *viewerOwnershipIdentifier;
 @end
 
 @implementation TransientLineOverlayController
@@ -135,6 +137,28 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
         _panState = panState;
         _invalidation = [invalidation copy];
         _observers = [NSMutableArray array];
+        _viewerOwnershipIdentifier = NSUUID.UUID.UUIDString;
+        MeasurementImageContext *context = [MeasurementImageContext
+            contextWithStudyInstanceUID:model.imageIdentity.studyInstanceUID
+            seriesInstanceUID:model.imageIdentity.seriesInstanceUID
+            sopInstanceUID:model.imageIdentity.sopInstanceUID
+            frameNumber:model.imageIdentity.frameNumber
+            pixelWidth:model.imageIdentity.pixelWidth
+            pixelHeight:model.imageIdentity.pixelHeight error:nil];
+        MeasurementInteractionDefinition *definition =
+            [LegacyDistanceInteractionAdapter interactionDefinition];
+        NSArray *landmarks = @[
+            [NamedImageLandmark landmarkWithIdentifier:
+                MedisaleLandmarkIdentifierEndpointA imagePoint:model.pointA error:nil],
+            [NamedImageLandmark landmarkWithIdentifier:
+                MedisaleLandmarkIdentifierEndpointB imagePoint:model.pointB error:nil],
+        ];
+        NamedLandmarkSnapshot *snapshot = [NamedLandmarkSnapshot
+            snapshotWithMethod:definition.method imageContext:context
+            landmarks:landmarks error:nil];
+        _session = [MeasurementInteractionSession
+            sessionWithViewerOwnershipIdentifier:_viewerOwnershipIdentifier
+            definition:definition landmarkSnapshot:snapshot error:nil];
     }
     return self;
 }
@@ -153,7 +177,7 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
         return YES;
     }
     DCMView *imageView = self.viewer.imageView;
-    if (imageView == nil || ![self currentImageMatchesModel]) {
+    if (imageView == nil || self.session == nil || ![self currentImageMatchesModel]) {
         return NO;
     }
 
@@ -164,7 +188,8 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
         initWithFrame:imageView.bounds];
     overlayView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     overlayView.imageView = imageView;
-    overlayView.model = self.model;
+    overlayView.legacyModel = self.model;
+    overlayView.session = self.session;
     overlayView.wantsLayer = YES;
     [imageView addSubview:overlayView positioned:NSWindowAbove relativeTo:nil];
     self.overlayView = overlayView;
@@ -180,6 +205,15 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
             usingBlock:^(NSNotification *notification) {
                 (void)notification;
                 [weakSelf invalidate];
+            }]];
+        [self.observers addObject:[center
+            addObserverForName:NSWindowDidResignKeyNotification
+            object:imageView.window queue:NSOperationQueue.mainQueue
+            usingBlock:^(NSNotification *notification) {
+                (void)notification;
+                [weakSelf.session handleFocusLoss];
+                [weakSelf syncLegacyModelFromSession];
+                [weakSelf requestRedraw];
             }]];
     }
     [self.observers addObject:[center
@@ -228,27 +262,40 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
                 return event;
             }
             if (event.type == NSEventTypeKeyDown && event.keyCode == 53) {
-                if (self.draggingEndpoint) {
-                    [self cancelEndpointDragRestoring:YES];
+                if (self.session.state == MedisaleMeasurementInteractionStateEditing ||
+                    self.session.selectedLandmarkIdentifier != 0) {
+                    [self.session cancelCurrentOperation];
+                    [self syncLegacyModelFromSession];
+                    [self requestRedraw];
                     return nil;
                 }
-                if (self.selectedEndpoint != MedisaleEndpointNone) {
-                    [self selectEndpoint:MedisaleEndpointNone];
+                return event;
+            }
+            if (event.type == NSEventTypeKeyDown &&
+                (event.modifierFlags & NSEventModifierFlagCommand) != 0 &&
+                [[event.charactersIgnoringModifiers lowercaseString]
+                    isEqualToString:@"z"]) {
+                BOOL redo = (event.modifierFlags & NSEventModifierFlagShift) != 0;
+                if (redo ? [self.session redo] : [self.session undo]) {
+                    [self syncLegacyModelFromSession];
+                    [self requestRedraw];
                     return nil;
                 }
                 return event;
             }
             if (event.type == NSEventTypeLeftMouseDown) {
-                return [self beginEndpointDragForEvent:event] ? nil : event;
+                return [self beginLandmarkDragForEvent:event] ? nil : event;
             }
-            if (event.type == NSEventTypeLeftMouseDragged && self.draggingEndpoint) {
-                [self updateEndpointDragForEvent:event];
+            if (event.type == NSEventTypeLeftMouseDragged &&
+                self.session.state == MedisaleMeasurementInteractionStateEditing) {
+                [self updateLandmarkDragForEvent:event];
                 return nil;
             }
-            if (event.type == NSEventTypeLeftMouseUp && self.draggingEndpoint) {
-                [self updateEndpointDragForEvent:event];
-                self.draggingEndpoint = NO;
-                [self.model updateInputState:LineOverlayInputStateComplete];
+            if (event.type == NSEventTypeLeftMouseUp &&
+                self.session.state == MedisaleMeasurementInteractionStateEditing) {
+                [self updateLandmarkDragForEvent:event];
+                [self.session endSelectedLandmarkDrag];
+                [self syncLegacyModelFromSession];
                 [self requestRedraw];
                 return nil;
             }
@@ -293,48 +340,33 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
 
 - (void)cancelCurrentInteraction
 {
-    if (self.draggingEndpoint || self.selectedEndpoint != MedisaleEndpointNone) {
-        [self cancelEndpointDragRestoring:YES];
-    }
-}
-
-- (void)selectEndpoint:(MedisaleEndpoint)endpoint
-{
-    self.selectedEndpoint = endpoint;
-    self.overlayView.selectedEndpoint = endpoint;
-    if (!self.draggingEndpoint) {
-        LineOverlayInputState state = LineOverlayInputStateComplete;
-        if (endpoint == MedisaleEndpointA) {
-            state = LineOverlayInputStateEndpointASelected;
-        } else if (endpoint == MedisaleEndpointB) {
-            state = LineOverlayInputStateEndpointBSelected;
-        }
-        [self.model updateInputState:state];
-    }
+    [self.session cancelCurrentOperation];
+    [self syncLegacyModelFromSession];
     [self requestRedraw];
 }
 
-- (MedisaleEndpoint)endpointNearViewPoint:(NSPoint)viewPoint
+- (NSDictionary<NSNumber *, NSValue *> *)displayPointsByIdentifier
 {
     DCMView *imageView = self.viewer.imageView;
-    if (imageView == nil) {
-        return MedisaleEndpointNone;
+    NSMutableDictionary *points = [NSMutableDictionary dictionary];
+    for (NamedImageLandmark *landmark in self.session.landmarks) {
+        points[@(landmark.identifier)] = [NSValue valueWithPoint:
+            [imageView ConvertFromGL2NSView:landmark.imagePoint]];
     }
-    NSPoint a = [imageView ConvertFromGL2NSView:self.model.pointA];
-    NSPoint b = [imageView ConvertFromGL2NSView:self.model.pointB];
-    double distanceA = hypot(viewPoint.x - a.x, viewPoint.y - a.y);
-    double distanceB = hypot(viewPoint.x - b.x, viewPoint.y - b.y);
-    static const double hitRadius = 12.0;
-    if (distanceA > hitRadius && distanceB > hitRadius) {
-        return MedisaleEndpointNone;
-    }
-    return distanceA <= distanceB ? MedisaleEndpointA : MedisaleEndpointB;
+    return points;
 }
 
-- (BOOL)beginEndpointDragForEvent:(NSEvent *)event
+- (MedisaleLandmarkIdentifier)landmarkNearViewPoint:(NSPoint)viewPoint
+{
+    return [MeasurementLandmarkHitTester nearestLandmarkToViewPoint:viewPoint
+        displayPointsByIdentifier:[self displayPointsByIdentifier]
+        hitRadius:12.0];
+}
+
+- (BOOL)beginLandmarkDragForEvent:(NSEvent *)event
 {
     if (!self.active || ![self currentImageMatchesModel]) {
-        [self cancelEndpointDragRestoring:NO];
+        [self.session cancelCurrentOperation];
         if (self.active) {
             [self invalidate];
         }
@@ -343,30 +375,29 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
     DCMView *imageView = self.viewer.imageView;
     NSPoint viewPoint = [imageView convertPoint:event.locationInWindow fromView:nil];
     if (!NSPointInRect(viewPoint, imageView.bounds)) {
-        [self selectEndpoint:MedisaleEndpointNone];
+        [self.session cancelCurrentOperation];
+        [self syncLegacyModelFromSession];
         return NO;
     }
-    MedisaleEndpoint endpoint = [self endpointNearViewPoint:viewPoint];
-    if (endpoint == MedisaleEndpointNone) {
-        [self selectEndpoint:MedisaleEndpointNone];
+    MedisaleLandmarkIdentifier identifier = [self landmarkNearViewPoint:viewPoint];
+    if (identifier == 0) {
+        [self.session cancelCurrentOperation];
+        [self syncLegacyModelFromSession];
         return NO;
     }
-    [self selectEndpoint:endpoint];
-    self.dragOrigin = endpoint == MedisaleEndpointA ? self.model.pointA : self.model.pointB;
-    self.draggingEndpoint = YES;
-    [self.model updateInputState:endpoint == MedisaleEndpointA
-        ? LineOverlayInputStateEditingEndpointA
-        : LineOverlayInputStateEditingEndpointB];
-    return YES;
+    BOOL began = [self.session selectLandmarkIdentifier:identifier] &&
+        [self.session beginSelectedLandmarkDrag];
+    [self syncLegacyModelFromSession];
+    return began;
 }
 
-- (void)updateEndpointDragForEvent:(NSEvent *)event
+- (void)updateLandmarkDragForEvent:(NSEvent *)event
 {
-    if (!self.draggingEndpoint) {
+    if (self.session.state != MedisaleMeasurementInteractionStateEditing) {
         return;
     }
     if (![self currentImageMatchesModel]) {
-        [self cancelEndpointDragRestoring:YES];
+        [self.session cancelCurrentOperation];
         [self invalidate];
         return;
     }
@@ -374,30 +405,36 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
     NSPoint viewPoint = [imageView convertPoint:event.locationInWindow fromView:nil];
     NSPoint imagePoint = [imageView ConvertFromNSView2GL:viewPoint];
     ImageContext *identity = self.model.imageIdentity;
-    imagePoint.x = MIN(MAX(imagePoint.x, 0.0), (double)identity.pixelWidth - 1.0);
-    imagePoint.y = MIN(MAX(imagePoint.y, 0.0), (double)identity.pixelHeight - 1.0);
-    if (self.selectedEndpoint == MedisaleEndpointA) {
-        [self.model updatePointA:imagePoint];
-    } else if (self.selectedEndpoint == MedisaleEndpointB) {
-        [self.model updatePointB:imagePoint];
+    if (imagePoint.x < 0.0 || imagePoint.y < 0.0 ||
+        imagePoint.x >= identity.pixelWidth || imagePoint.y >= identity.pixelHeight) {
+        return;
     }
+    [self.session updateSelectedLandmarkToImagePoint:imagePoint error:nil];
+    [self syncLegacyModelFromSession];
     [self requestRedraw];
 }
 
-- (void)cancelEndpointDragRestoring:(BOOL)restore
+- (void)syncLegacyModelFromSession
 {
-    if (restore && self.draggingEndpoint) {
-        if (self.selectedEndpoint == MedisaleEndpointA) {
-            [self.model updatePointA:self.dragOrigin];
-        } else if (self.selectedEndpoint == MedisaleEndpointB) {
-            [self.model updatePointB:self.dragOrigin];
-        }
+    NamedImageLandmark *first = [self.session landmarkForIdentifier:
+        MedisaleLandmarkIdentifierEndpointA];
+    NamedImageLandmark *second = [self.session landmarkForIdentifier:
+        MedisaleLandmarkIdentifierEndpointB];
+    if (first != nil) [self.model updatePointA:first.imagePoint];
+    if (second != nil) [self.model updatePointB:second.imagePoint];
+    LineOverlayInputState inputState = LineOverlayInputStateComplete;
+    if (self.session.selectedLandmarkIdentifier ==
+            MedisaleLandmarkIdentifierEndpointA) {
+        inputState = self.session.state == MedisaleMeasurementInteractionStateEditing
+            ? LineOverlayInputStateEditingEndpointA
+            : LineOverlayInputStateComplete;
+    } else if (self.session.selectedLandmarkIdentifier ==
+            MedisaleLandmarkIdentifierEndpointB) {
+        inputState = self.session.state == MedisaleMeasurementInteractionStateEditing
+            ? LineOverlayInputStateEditingEndpointB
+            : LineOverlayInputStateComplete;
     }
-    self.draggingEndpoint = NO;
-    self.selectedEndpoint = MedisaleEndpointNone;
-    self.overlayView.selectedEndpoint = MedisaleEndpointNone;
-    [self.model updateInputState:LineOverlayInputStateComplete];
-    [self requestRedraw];
+    [self.model updateInputState:inputState];
 }
 
 - (void)requestRedraw
@@ -424,7 +461,7 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
     }
 
     self.active = NO;
-    [self cancelEndpointDragRestoring:YES];
+    [self.session cancelCurrentOperation];
     [self.redrawTimer invalidate];
     self.redrawTimer = nil;
     if (self.eventMonitor != nil) {
@@ -443,12 +480,15 @@ typedef NS_ENUM(NSInteger, MedisaleEndpoint) {
     }
     [self.overlayView removeFromSuperview];
     self.overlayView.imageView = nil;
-    self.overlayView.model = nil;
+    self.overlayView.legacyModel = nil;
+    self.overlayView.session = nil;
     self.overlayView = nil;
 
     MedisaleOverlayInvalidation invalidation = self.invalidation;
     self.invalidation = nil;
     self.panState = nil;
+    [self.session invalidate];
+    self.session = nil;
     self.viewer = nil;
     if (invalidation != nil) {
         invalidation();

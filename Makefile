@@ -3,15 +3,16 @@ HOROS_HEADERS := $(HOROS_APP)/Contents/Frameworks/Horos.framework/Versions/A/Hea
 BUILD_DIR := build
 BUNDLE := $(BUILD_DIR)/MedisalePlugin.osirixplugin
 EXECUTABLE := $(BUNDLE)/Contents/MacOS/MedisalePlugin
-SOURCES := plugin/MedisalePluginFilter.m plugin/ImageContext.m plugin/HorosAdapter.m plugin/MeasurementContextConsumer.m plugin/TwoPointInputController.m plugin/LineOverlayModel.m plugin/TransientLineOverlayController.m plugin/GuidePreferenceStore.m plugin/GuideEngine.m plugin/MeasurementRecord.m plugin/MeasurementDomain.m plugin/MeasurementPersistenceDTO.m plugin/LegacyDistanceMeasurementAdapter.m plugin/SQLiteMeasurementStore.m plugin/ViewerInspectorPanelHost.m plugin/CompactGuideViewState.m plugin/CompactGuidePresentation.m plugin/CompactGuideLayoutPolicy.m plugin/CompactGuideLocalization.m plugin/HoldSpacePanState.m plugin/TemporaryPanController.m plugin/CalibrationConfirmationState.m
+SOURCES := plugin/MedisalePluginFilter.m plugin/ImageContext.m plugin/HorosAdapter.m plugin/MeasurementContextConsumer.m plugin/MeasurementInteraction.m plugin/LegacyDistanceInteractionAdapter.m plugin/TwoPointInputController.m plugin/LineOverlayModel.m plugin/TransientLineOverlayController.m plugin/GuidePreferenceStore.m plugin/GuideEngine.m plugin/MeasurementRecord.m plugin/MeasurementDomain.m plugin/MeasurementPersistenceDTO.m plugin/LegacyDistanceMeasurementAdapter.m plugin/SQLiteMeasurementStore.m plugin/ViewerInspectorPanelHost.m plugin/CompactGuideViewState.m plugin/CompactGuidePresentation.m plugin/CompactGuideLayoutPolicy.m plugin/CompactGuideLocalization.m plugin/HoldSpacePanState.m plugin/TemporaryPanController.m plugin/CalibrationConfirmationState.m
 RESOURCE_FILES := $(shell find plugin/Resources -type f -print)
 PERSISTENCE_TEST := $(BUILD_DIR)/PersistenceStoreTests
 COMPACT_GUIDE_TEST := $(BUILD_DIR)/CompactGuideTests
 HOLD_SPACE_PAN_TEST := $(BUILD_DIR)/HoldSpacePanTests
 CALIBRATION_CONFIRMATION_TEST := $(BUILD_DIR)/CalibrationConfirmationTests
 MEASUREMENT_DOMAIN_TEST := $(BUILD_DIR)/MeasurementDomainTests
+MEASUREMENT_INTERACTION_TEST := $(BUILD_DIR)/MeasurementInteractionTests
 
-.PHONY: all clean sign verify test-persistence test-compact-guide test-hold-space-pan test-calibration-confirmation test-measurement-domain
+.PHONY: all clean sign verify test-persistence test-compact-guide test-hold-space-pan test-calibration-confirmation test-measurement-domain test-measurement-interaction
 
 all: $(EXECUTABLE)
 
@@ -68,7 +69,16 @@ verify: sign
 	@rg -q 'PRAGMA foreign_keys = ON' plugin/SQLiteMeasurementStore.m
 	@rg -q 'SQLITE_OPEN_READONLY' plugin/SQLiteMeasurementStore.m
 	@rg -q 'PRAGMA query_only = ON' plugin/SQLiteMeasurementStore.m
+	@! sed -n '/initWithDatabaseURL:/,/^}/p' plugin/SQLiteMeasurementStore.m | rg -q 'mkdir|O_CREAT|sqlite3_open|InitializeSchema|EnsureOwnedDirectoryForSave'
+	@! sed -n '/openReadOnlyDatabase:/,/^}/p' plugin/SQLiteMeasurementStore.m | rg -q 'mkdir|O_CREAT|SQLITE_OPEN_CREATE|EnsureOwnedDirectoryForSave'
+	@! rg -q 'SQLITE_OPEN_CREATE' plugin/SQLiteMeasurementStore.m
+	@rg -q 'O_CREAT \| O_EXCL' plugin/SQLiteMeasurementStore.m
+	@rg -q 'failed first save must leave no partial artifact root' tests/PersistenceStoreTests.m
+	@rg -q 'absent-store restore must not create filesystem state' tests/PersistenceStoreTests.m
+	@rg -q 'existing store read must create no new file' tests/PersistenceStoreTests.m
 	@rg -q 'latestMeasurementForImageContext' plugin/MeasurementPersistenceStore.h plugin/SQLiteMeasurementStore.m plugin/MedisalePluginFilter.m
+	@rg -q 'canPersistMeasurement' plugin/CompactGuideViewState.h plugin/CompactGuideViewState.m plugin/ViewerInspectorPanelHost.m tests/CompactGuideTests.m
+	@sed -n '/saveMeasurement:(id)sender/,/^}/p' plugin/ViewerInspectorPanelHost.m | rg -q '!self.guideState.canPersistMeasurement'
 	@rg -q 'OsirixViewerControllerDidLoadImagesNotification' plugin/MedisalePluginFilter.m
 	@rg -q 'OsirixDCMViewIndexChangedNotification' plugin/MedisalePluginFilter.m
 	@rg -q 'willUnload' plugin/MedisalePluginFilter.m
@@ -116,6 +126,17 @@ verify: sign
 	@! sed -n '/@implementation MeasurementDomainSnapshot/,/@end/p' plugin/MeasurementDomain.m | rg -q 'EndpointA|EndpointB|hypot'
 	@test "$$(rg -c 'hypot\(' plugin/MeasurementDomain.m)" = 1
 	@! rg -q 'MeasurementCalibrationReference|MeasurementReviewAssociation|MedisaleMeasurementCalibrationState|MedisaleMeasurementCalibrationProvenance' plugin/MeasurementDomain.h plugin/MeasurementDomain.m
+	@! sed -n '/@implementation MeasurementInteractionSession/,/@end/p' plugin/MeasurementInteraction.m | rg -q 'EndpointA|EndpointB|count[[:space:]]*==[[:space:]]*2'
+	@! rg -q 'EndpointA|EndpointB|hypot' plugin/MeasurementInteraction.h plugin/MeasurementInteraction.m
+	@rg -q 'collectionOrder.count < 2' plugin/MeasurementInteraction.m
+	@rg -q 'collectionOrder.count > 5' plugin/MeasurementInteraction.m
+	@rg -q 'MedisaleLandmarkIdentifierEndpointA' plugin/LegacyDistanceInteractionAdapter.m
+	@rg -q 'MedisaleLandmarkIdentifierEndpointB' plugin/LegacyDistanceInteractionAdapter.m
+	@! rg -q 'AppKit|Cocoa|ViewerController|DCMView|PluginFilter|sqlite3_|NSUserDefaults|CFPreferences' plugin/MeasurementInteraction.h plugin/MeasurementInteraction.m
+	@! rg -qi 'TPA|TPLO|TTA|postoperative' plugin/MeasurementInteraction.h plugin/MeasurementInteraction.m tests/MeasurementInteractionTests.m
+	@! rg -q 'MeasurementPersistence|MeasurementPanel|CompactGuide|Localization' plugin/MeasurementInteraction.h plugin/MeasurementInteraction.m
+	@rg -q 'MeasurementLandmarkHitTester' plugin/TransientLineOverlayController.m
+	@test "$$(rg -o 'addLocalMonitorForEventsMatchingMask' plugin/TwoPointInputController.m plugin/TransientLineOverlayController.m | wc -l | tr -d ' ')" = 2
 	@rg -q 'MedisaleCalibrationStateUnknown' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
 	@rg -q 'MedisaleCalibrationStateDICOMSpacingOnly' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
 	@rg -q 'MedisaleCalibrationStateCalibrated' plugin/CalibrationConfirmationState.h plugin/CalibrationConfirmationState.m
@@ -131,6 +152,7 @@ verify: sign
 	@$(MAKE) --no-print-directory test-hold-space-pan
 	@$(MAKE) --no-print-directory test-calibration-confirmation
 	@$(MAKE) --no-print-directory test-measurement-domain
+	@$(MAKE) --no-print-directory test-measurement-interaction
 	@echo "PASS: ad-hoc-signed arm64 bundle uses the real PluginFilter runtime class"
 
 $(PERSISTENCE_TEST): tests/PersistenceStoreTests.m plugin/ImageContext.m plugin/MeasurementRecord.m plugin/MeasurementDomain.m plugin/MeasurementPersistenceDTO.m plugin/LegacyDistanceMeasurementAdapter.m plugin/SQLiteMeasurementStore.m
@@ -192,6 +214,18 @@ $(MEASUREMENT_DOMAIN_TEST): tests/MeasurementDomainTests.m plugin/ImageContext.m
 
 test-measurement-domain: $(MEASUREMENT_DOMAIN_TEST)
 	@"$(MEASUREMENT_DOMAIN_TEST)"
+
+$(MEASUREMENT_INTERACTION_TEST): tests/MeasurementInteractionTests.m plugin/MeasurementDomain.m plugin/MeasurementInteraction.m plugin/LegacyDistanceInteractionAdapter.m
+	mkdir -p "$(BUILD_DIR)"
+	clang -arch arm64 -fobjc-arc -fmodules \
+		-isysroot "$$(xcrun --sdk macosx --show-sdk-path)" \
+		-fmodules-cache-path="$(BUILD_DIR)/ModuleCache" \
+		-mmacosx-version-min=10.15 \
+		-Iplugin -framework Foundation \
+		-o "$@" $^
+
+test-measurement-interaction: $(MEASUREMENT_INTERACTION_TEST)
+	@"$(MEASUREMENT_INTERACTION_TEST)"
 
 clean:
 	rm -rf "$(BUILD_DIR)"
