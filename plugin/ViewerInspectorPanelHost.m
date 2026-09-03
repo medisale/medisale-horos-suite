@@ -486,7 +486,9 @@ existingMeasurement:(MeasurementRecord *)existingMeasurement
         }
         self.detailsField.stringValue = [NSString stringWithFormat:@"%@\n\n%@\n%@",
             [l stringForKey:@"guide.details.body"], coordinates, spacingDetails];
-        self.saveButton.enabled = self.model.inputState == LineOverlayInputStateComplete;
+        self.saveButton.enabled =
+            self.model.inputState == LineOverlayInputStateComplete &&
+            state.canPersistMeasurement;
         if (self.hasSaved) {
             BOOL unchanged = NSEqualPoints(self.model.pointA, self.savedPointA) &&
                 NSEqualPoints(self.model.pointB, self.savedPointB);
@@ -593,7 +595,8 @@ existingMeasurement:(MeasurementRecord *)existingMeasurement
     id<MeasurementPersistenceStore> store = self.persistenceStore;
     CompactGuideLocalization *l = self.localization;
     if (model == nil || store == nil ||
-        model.inputState != LineOverlayInputStateComplete) {
+        model.inputState != LineOverlayInputStateComplete ||
+        !self.guideState.canPersistMeasurement) {
         self.saveStatusField.stringValue = [l stringForKey:@"guide.save.unavailable"];
         NSBeep();
         return;

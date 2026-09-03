@@ -105,7 +105,10 @@ static BOOL MedisaleValidateNoSymlinkComponents(NSString *path, NSError **error)
     return YES;
 }
 
-static BOOL MedisaleEnsureOwnedDirectory(NSURL *directoryURL, NSError **error)
+static BOOL MedisaleEnsureOwnedDirectoryForSave(
+    NSURL *directoryURL,
+    NSMutableArray<NSString *> *createdDirectories,
+    NSError **error)
 {
     NSString *path = directoryURL.path.stringByStandardizingPath;
     if (!MedisalePathIsWithinHome(path)) {
@@ -132,6 +135,7 @@ static BOOL MedisaleEnsureOwnedDirectory(NSURL *directoryURL, NSError **error)
                 }
                 return NO;
             }
+            [createdDirectories addObject:current];
         }
         if (!MedisaleValidateOwnedPathComponent(current, YES, error)) {
             return NO;
@@ -149,29 +153,16 @@ static BOOL MedisaleEnsureOwnedDirectory(NSURL *directoryURL, NSError **error)
     return YES;
 }
 
-static BOOL MedisaleEnsureOwnedDatabaseFile(NSURL *databaseURL, NSError **error)
+static BOOL MedisaleValidateOwnedDatabaseFile(NSURL *databaseURL, NSError **error)
 {
     NSString *path = databaseURL.path.stringByStandardizingPath;
     struct stat status;
     if (lstat(path.fileSystemRepresentation, &status) != 0) {
-        if (errno != ENOENT) {
-            if (error != NULL) {
-                *error = MedisalePersistenceError(MedisalePersistenceErrorUnsafePath,
-                    @"The standalone database file could not be inspected.");
-            }
-            return NO;
+        if (error != NULL) {
+            *error = MedisalePersistenceError(MedisalePersistenceErrorUnsafePath,
+                @"The standalone database file could not be inspected.");
         }
-        int descriptor = open(path.fileSystemRepresentation,
-                              O_CREAT | O_EXCL | O_RDWR | O_NOFOLLOW,
-                              S_IRUSR | S_IWUSR);
-        if (descriptor < 0) {
-            if (error != NULL) {
-                *error = MedisalePersistenceError(MedisalePersistenceErrorIO,
-                    @"The standalone database file could not be created safely.");
-            }
-            return NO;
-        }
-        close(descriptor);
+        return NO;
     }
     if (!MedisaleValidateOwnedPathComponent(path, NO, error)) {
         return NO;
@@ -203,6 +194,44 @@ static BOOL MedisaleEnsureOwnedDatabaseFile(NSURL *databaseURL, NSError **error)
             @"The standalone database canonical path is not contained in the user home.");
     }
     return contained;
+}
+
+static void MedisaleRemoveFirstSaveArtifacts(
+    NSURL *databaseURL,
+    NSArray<NSString *> *createdDirectories)
+{
+    NSString *databasePath = databaseURL.path.stringByStandardizingPath;
+    unlink([[databasePath stringByAppendingString:@"-wal"] fileSystemRepresentation]);
+    unlink([[databasePath stringByAppendingString:@"-shm"] fileSystemRepresentation]);
+    unlink(databasePath.fileSystemRepresentation);
+    for (NSString *directory in createdDirectories.reverseObjectEnumerator) {
+        rmdir(directory.fileSystemRepresentation);
+    }
+}
+
+static BOOL MedisaleInitializeSchema(sqlite3 *database, NSError **error)
+{
+    static const char *schema =
+        "CREATE TABLE IF NOT EXISTS measurements ("
+        "measurement_id TEXT PRIMARY KEY NOT NULL CHECK(length(measurement_id) > 0),"
+        "study_instance_uid TEXT NOT NULL CHECK(length(study_instance_uid) > 0),"
+        "series_instance_uid TEXT NOT NULL CHECK(length(series_instance_uid) > 0),"
+        "sop_instance_uid TEXT NOT NULL CHECK(length(sop_instance_uid) > 0),"
+        "frame_number INTEGER NOT NULL CHECK(frame_number >= 0),"
+        "endpoint_a_x REAL NOT NULL, endpoint_a_y REAL NOT NULL,"
+        "endpoint_b_x REAL NOT NULL, endpoint_b_y REAL NOT NULL,"
+        "pixel_distance REAL NOT NULL CHECK(pixel_distance >= 0),"
+        "schema_version INTEGER NOT NULL CHECK(schema_version = 1),"
+        "created_at REAL NOT NULL, updated_at REAL NOT NULL"
+        ");"
+        "PRAGMA user_version = 1;";
+    char *message = NULL;
+    int result = sqlite3_exec(database, schema, NULL, NULL, &message);
+    sqlite3_free(message);
+    if (result != SQLITE_OK && error != NULL) {
+        *error = MedisaleSQLiteError(result, @"initialize its schema");
+    }
+    return result == SQLITE_OK;
 }
 
 static BOOL MedisaleRecordIsValid(MeasurementRecord *record)
@@ -256,24 +285,40 @@ static BOOL MedisaleRecordIsValid(MeasurementRecord *record)
             }
             return nil;
         }
-        NSURL *parent = [standardized URLByDeletingLastPathComponent];
-        if (!MedisaleEnsureOwnedDirectory(parent, error) ||
-            !MedisaleEnsureOwnedDatabaseFile(standardized, error)) {
-            return nil;
-        }
         _databaseURL = standardized;
-        if (![self initializeSchema:error]) {
-            return nil;
-        }
     }
     return self;
 }
 
-- (BOOL)openDatabase:(sqlite3 **)database error:(NSError **)error
+- (BOOL)openDatabaseForSave:(sqlite3 **)database
+               createdFile:(BOOL *)createdFile
+        createdDirectories:(NSMutableArray<NSString *> *)createdDirectories
+                      error:(NSError **)error
 {
-    if (!MedisaleValidateNoSymlinkComponents(
-            self.databaseURL.URLByDeletingLastPathComponent.path, error) ||
-        !MedisaleEnsureOwnedDatabaseFile(self.databaseURL, error)) {
+    NSURL *parent = self.databaseURL.URLByDeletingLastPathComponent;
+    NSString *path = self.databaseURL.path.stringByStandardizingPath;
+    struct stat status;
+    *createdFile = NO;
+    if (lstat(path.fileSystemRepresentation, &status) != 0) {
+        if (errno != ENOENT ||
+            !MedisaleEnsureOwnedDirectoryForSave(parent, createdDirectories, error)) {
+            return NO;
+        }
+        int descriptor = open(path.fileSystemRepresentation,
+                              O_CREAT | O_EXCL | O_RDWR | O_NOFOLLOW,
+                              S_IRUSR | S_IWUSR);
+        if (descriptor < 0) {
+            if (error != NULL) {
+                *error = MedisalePersistenceError(MedisalePersistenceErrorIO,
+                    @"The standalone database file could not be created safely.");
+            }
+            return NO;
+        }
+        close(descriptor);
+        *createdFile = YES;
+    }
+    if (!MedisaleValidateNoSymlinkComponents(parent.path, error) ||
+        !MedisaleValidateOwnedDatabaseFile(self.databaseURL, error)) {
         return NO;
     }
     sqlite3 *connection = NULL;
@@ -307,9 +352,22 @@ static BOOL MedisaleRecordIsValid(MeasurementRecord *record)
 
 - (BOOL)openReadOnlyDatabase:(sqlite3 **)database error:(NSError **)error
 {
+    NSString *path = self.databaseURL.path.stringByStandardizingPath;
+    struct stat status;
+    if (lstat(path.fileSystemRepresentation, &status) != 0) {
+        if (errno == ENOENT) {
+            *database = NULL;
+            return YES;
+        }
+        if (error != NULL) {
+            *error = MedisalePersistenceError(MedisalePersistenceErrorUnsafePath,
+                @"The standalone database file could not be inspected.");
+        }
+        return NO;
+    }
     if (!MedisaleValidateNoSymlinkComponents(
             self.databaseURL.URLByDeletingLastPathComponent.path, error) ||
-        !MedisaleEnsureOwnedDatabaseFile(self.databaseURL, error)) {
+        !MedisaleValidateOwnedDatabaseFile(self.databaseURL, error)) {
         return NO;
     }
     sqlite3 *connection = NULL;
@@ -339,41 +397,6 @@ static BOOL MedisaleRecordIsValid(MeasurementRecord *record)
     return YES;
 }
 
-- (BOOL)initializeSchema:(NSError **)error
-{
-    sqlite3 *database = NULL;
-    if (![self openDatabase:&database error:error]) {
-        return NO;
-    }
-    static const char *schema =
-        "BEGIN IMMEDIATE;"
-        "CREATE TABLE IF NOT EXISTS measurements ("
-        "measurement_id TEXT PRIMARY KEY NOT NULL CHECK(length(measurement_id) > 0),"
-        "study_instance_uid TEXT NOT NULL CHECK(length(study_instance_uid) > 0),"
-        "series_instance_uid TEXT NOT NULL CHECK(length(series_instance_uid) > 0),"
-        "sop_instance_uid TEXT NOT NULL CHECK(length(sop_instance_uid) > 0),"
-        "frame_number INTEGER NOT NULL CHECK(frame_number >= 0),"
-        "endpoint_a_x REAL NOT NULL, endpoint_a_y REAL NOT NULL,"
-        "endpoint_b_x REAL NOT NULL, endpoint_b_y REAL NOT NULL,"
-        "pixel_distance REAL NOT NULL CHECK(pixel_distance >= 0),"
-        "schema_version INTEGER NOT NULL CHECK(schema_version = 1),"
-        "created_at REAL NOT NULL, updated_at REAL NOT NULL"
-        ");"
-        "PRAGMA user_version = 1;"
-        "COMMIT;";
-    char *message = NULL;
-    int result = sqlite3_exec(database, schema, NULL, NULL, &message);
-    sqlite3_free(message);
-    if (result != SQLITE_OK) {
-        sqlite3_exec(database, "ROLLBACK", NULL, NULL, NULL);
-        if (error != NULL) {
-            *error = MedisaleSQLiteError(result, @"initialize its schema");
-        }
-    }
-    sqlite3_close(database);
-    return result == SQLITE_OK;
-}
-
 - (BOOL)saveMeasurement:(MeasurementRecord *)measurement error:(NSError **)error
 {
     if (!MedisaleRecordIsValid(measurement)) {
@@ -394,8 +417,18 @@ static BOOL MedisaleRecordIsValid(MeasurementRecord *record)
     sqlite3_stmt *statement = NULL;
     ImageContext *context = measurement.imageContext;
     BOOL transactionStarted = NO;
+    BOOL createdFile = NO;
     BOOL success = NO;
-    if (![self openDatabase:&database error:error]) {
+    NSMutableArray<NSString *> *createdDirectories = [NSMutableArray array];
+    if (![self openDatabaseForSave:&database createdFile:&createdFile
+                createdDirectories:createdDirectories error:error]) {
+        if (createdFile) {
+            MedisaleRemoveFirstSaveArtifacts(self.databaseURL, createdDirectories);
+        } else {
+            for (NSString *directory in createdDirectories.reverseObjectEnumerator) {
+                rmdir(directory.fileSystemRepresentation);
+            }
+        }
         return NO;
     }
 
@@ -407,6 +440,10 @@ static BOOL MedisaleRecordIsValid(MeasurementRecord *record)
         goto cleanup;
     }
     transactionStarted = YES;
+
+    if (createdFile && !MedisaleInitializeSchema(database, error)) {
+        goto cleanup;
+    }
 
     if (self.failureInjection == MedisaleSQLiteFailureInjectionConstraint) {
         result = sqlite3_prepare_v2(database,
@@ -494,7 +531,7 @@ static BOOL MedisaleRecordIsValid(MeasurementRecord *record)
             *error = MedisalePersistenceError(MedisalePersistenceErrorInjected,
                 @"The simulated save was interrupted before commit.");
         }
-        return NO;
+        goto cleanup;
     }
 
     result = sqlite3_exec(database, "COMMIT", NULL, NULL, NULL);
@@ -517,6 +554,9 @@ cleanup:
     if (database != NULL) {
         sqlite3_close(database);
     }
+    if (!success && createdFile) {
+        MedisaleRemoveFirstSaveArtifacts(self.databaseURL, createdDirectories);
+    }
     return success;
 }
 
@@ -538,6 +578,9 @@ cleanup:
     sqlite3 *database = NULL;
     sqlite3_stmt *statement = NULL;
     if (![self openReadOnlyDatabase:&database error:error]) {
+        return nil;
+    }
+    if (database == NULL) {
         return nil;
     }
     static const char *query =

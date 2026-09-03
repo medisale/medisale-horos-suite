@@ -56,13 +56,19 @@ static void TestStateMachine(void)
            @"two points calculate result");
     Assert(state.canCancel, @"unconfirmed calculation can cancel");
     Assert(state.canConfirm, @"unconfirmed calculation can confirm");
+    Assert(!state.canPersistMeasurement,
+           @"unconfirmed calculation cannot cross the persistence boundary");
     Assert([state confirm], @"confirm review");
     Assert(state.measurementState == CompactGuideMeasurementStateConfirmed,
            @"confirmed state");
     Assert(state.confirmationState == CompactGuideConfirmationStateUserConfirmed,
            @"confirmed marker");
+    Assert(state.canPersistMeasurement,
+           @"confirmed measurement may cross the persistence boundary");
     Assert(!state.canConfirm, @"cannot reconfirm unchanged result");
     Assert([state beginEditing], @"begin editing confirmed result");
+    Assert(!state.canPersistMeasurement,
+           @"editing closes the persistence boundary");
     Assert(state.measurementState == CompactGuideMeasurementStateEditing,
            @"editing state");
     [state updateMeasurementSnapshotWithPointA:NSMakePoint(2, 2)
@@ -74,8 +80,12 @@ static void TestStateMachine(void)
     Assert(state.confirmationState ==
            CompactGuideConfirmationStateModifiedAfterConfirmation,
            @"modified confirmation marker");
+    Assert(!state.canPersistMeasurement,
+           @"modified measurement requires renewed confirmation before persistence");
     Assert(state.canConfirm, @"modified result can be reviewed again");
     Assert([state confirm], @"confirm modified result");
+    Assert(state.canPersistMeasurement,
+           @"renewed confirmation reopens the persistence boundary");
     Assert([state beginEditing], @"begin no-change edit");
     [state updateMeasurementSnapshotWithPointA:NSMakePoint(2, 2)
         pointB:NSMakePoint(4, 6) rawResult:sqrt(20.0)

@@ -58,6 +58,13 @@ NSNotificationName const CompactGuideViewStateDidChangeNotification =
         self.confirmationState != CompactGuideConfirmationStateInvalidated;
 }
 
+- (BOOL)canPersistMeasurement
+{
+    return self.measurementState == CompactGuideMeasurementStateConfirmed &&
+        self.confirmationState == CompactGuideConfirmationStateUserConfirmed &&
+        self.confirmationModel.confirmedSnapshot.isStructurallyValid;
+}
+
 - (BOOL)startCollecting
 {
     if (self.measurementState != CompactGuideMeasurementStateIdle &&

@@ -47,6 +47,7 @@ FOUNDATION_EXPORT NSNotificationName const CompactGuideViewStateDidChangeNotific
 @property(nonatomic, readonly, getter=isExpanded) BOOL expanded;
 @property(nonatomic, readonly) BOOL canCancel;
 @property(nonatomic, readonly) BOOL canConfirm;
+@property(nonatomic, readonly) BOOL canPersistMeasurement;
 
 - (instancetype)initWithImageIdentity:(ImageContext *)imageIdentity
                       calibrationModel:(CalibrationProvenanceModel *)calibrationModel
